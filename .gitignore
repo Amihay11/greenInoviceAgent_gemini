@@ -1,0 +1,16 @@
+# Node modules
+node_modules/
+agent/node_modules/
+GreenInvoice-MCP-main/node_modules/
+
+# Secrets and environment variables
+.env
+agent/.env
+
+# Local logs and session data
+agent/agent.log
+agent/agent-error.log
+agent/whatsapp-auth/
+
+# Portable binaries
+node/

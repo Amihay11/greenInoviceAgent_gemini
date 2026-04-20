@@ -1,0 +1,102 @@
+﻿[
+    {
+        "name":  "אורית אודס",
+        "balanceAmount":  865
+    },
+    {
+        "name":  "אורית שילר",
+        "balanceAmount":  2475
+    },
+    {
+        "name":  "איילת בנבנישתי",
+        "balanceAmount":  835
+    },
+    {
+        "name":  "איתן לשם",
+        "balanceAmount":  1320
+    },
+    {
+        "name":  "אליהו הורוביץ",
+        "balanceAmount":  390
+    },
+    {
+        "name":  "אמיר גת יעוץ עסקי",
+        "balanceAmount":  0
+    },
+    {
+        "name":  "אמיתי",
+        "balanceAmount":  3952.5
+    },
+    {
+        "name":  "אנגלסמן",
+        "balanceAmount":  1387.5
+    },
+    {
+        "name":  "אסתי אילני",
+        "balanceAmount":  805
+    },
+    {
+        "name":  "אשכנזי",
+        "balanceAmount":  2695
+    },
+    {
+        "name":  "בית ספר נועם נצרים",
+        "balanceAmount":  2510
+    },
+    {
+        "name":  "בית ספר נועם נצרים בנות",
+        "balanceAmount":  4305
+    },
+    {
+        "name":  "בן ישר",
+        "balanceAmount":  2695
+    },
+    {
+        "name":  "בר יוסף",
+        "balanceAmount":  0
+    },
+    {
+        "name":  "בראלי",
+        "balanceAmount":  595
+    },
+    {
+        "name":  "דבורה נוי",
+        "balanceAmount":  747.5
+    },
+    {
+        "name":  "דואני",
+        "balanceAmount":  520
+    },
+    {
+        "name":  "דנה חזן",
+        "balanceAmount":  730
+    },
+    {
+        "name":  "דני לוי",
+        "balanceAmount":  735
+    },
+    {
+        "name":  "הילר",
+        "balanceAmount":  2293.5
+    },
+    {
+        "name":  "וזיק",
+        "balanceAmount":  735
+    },
+    {
+        "name":  "חינוך בני שמעון",
+        "balanceAmount":  0
+    },
+    {
+        "name":  "חלוצית 1 בני נצרים",
+        "balanceAmount":  18509
+    },
+    {
+        "name":  "חלוצית 4",
+        "balanceAmount":  5000
+    },
+    {
+        "name":  "חנה גרוסי",
+        "balanceAmount":  715
+    }
+]

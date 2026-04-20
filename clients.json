@@ -1,0 +1,864 @@
+﻿[
+    {
+        "id":  "966213cb-eff9-4907-9c25-8c9379071243",
+        "name":  "אורית אודס",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "94927754",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "0545684800",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  865,
+        "creationDate":  1705777598,
+        "lastUpdateDate":  1723953655,
+        "balanceAmount":  865,
+        "self":  false
+    },
+    {
+        "id":  "f4424358-b768-4ec5-8ee8-ea45fc080e2c",
+        "name":  "אורית שילר",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "f8003874",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  2475,
+        "creationDate":  1728373184,
+        "lastUpdateDate":  1752349449,
+        "balanceAmount":  2475,
+        "self":  false
+    },
+    {
+        "id":  "bac4ddc7-cd91-46db-876e-bea1c0cefbc3",
+        "name":  "איילת בנבנישתי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "b6120047",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  835,
+        "creationDate":  1705777739,
+        "lastUpdateDate":  1722206112,
+        "balanceAmount":  835,
+        "self":  false
+    },
+    {
+        "id":  "43409788-b54b-49b3-940a-43419ad3a665",
+        "name":  "איתן לשם",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "42203724",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "+972 54-573-3504",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  1320,
+        "creationDate":  1728380748,
+        "lastUpdateDate":  1752361557,
+        "balanceAmount":  1320,
+        "self":  false
+    },
+    {
+        "id":  "de0a7ca7-ac40-49b4-bece-f93216b770c0",
+        "name":  "אליהו הורוביץ",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "d7275839",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  390,
+        "creationDate":  1761040969,
+        "lastUpdateDate":  1767526993,
+        "balanceAmount":  390,
+        "self":  false
+    },
+    {
+        "id":  "d8479d52-57e8-4fc5-9f0a-59090d2dd482",
+        "name":  "אמיר גת יעוץ עסקי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  true,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "d7087055",
+        "paymentTerms":  0,
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "fax":  "",
+        "mobile":  "",
+        "emails":  [
+                       "ergatgat@gmail.com"
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  0,
+        "creationDate":  1610054669,
+        "lastUpdateDate":  1610054669,
+        "balanceAmount":  0,
+        "self":  false
+    },
+    {
+        "id":  "02545a22-62ef-4af5-94aa-ea29eef536f3",
+        "name":  "אמיתי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "076334",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  3952.5,
+        "creationDate":  1705779944,
+        "lastUpdateDate":  1776609471,
+        "balanceAmount":  3952.5,
+        "self":  false
+    },
+    {
+        "id":  "80b71289-04d6-4927-afc7-fefd3a75979d",
+        "name":  "אנגלסמן",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "84217738",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  1387.5,
+        "creationDate":  1705780440,
+        "lastUpdateDate":  1776697196,
+        "balanceAmount":  1387.5,
+        "self":  false
+    },
+    {
+        "id":  "8b7cbeb1-4b4c-4237-bc73-a2fef62b21db",
+        "name":  "אסתי אילני",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "84570720",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  805,
+        "creationDate":  1705777851,
+        "lastUpdateDate":  1723953739,
+        "balanceAmount":  805,
+        "self":  false
+    },
+    {
+        "id":  "da4473ba-a23b-4546-a388-f782b9fd7161",
+        "name":  "אשכנזי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "d7152186",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  2695,
+        "creationDate":  1705779668,
+        "lastUpdateDate":  1776699084,
+        "balanceAmount":  2695,
+        "self":  false
+    },
+    {
+        "id":  "bd4c76f6-ec4e-4ecc-8d44-5d781e020901",
+        "name":  "בית ספר נועם נצרים",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "b6202940",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  2510,
+        "creationDate":  1739094376,
+        "lastUpdateDate":  1739165789,
+        "balanceAmount":  2510,
+        "self":  false
+    },
+    {
+        "id":  "7f3f0a40-de43-4da6-9413-8359424d4ee3",
+        "name":  "בית ספר נועם נצרים בנות",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  true,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "74169606",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+                       "noamnetsarim@gmail.com"
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  4305,
+        "creationDate":  1610918438,
+        "lastUpdateDate":  1771753265,
+        "balanceAmount":  4305,
+        "self":  false
+    },
+    {
+        "id":  "d1c1082f-173c-45db-95a7-97f59d4b7b86",
+        "name":  "בן ישר",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "d6873221",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  2695,
+        "creationDate":  1705780319,
+        "lastUpdateDate":  1776609547,
+        "balanceAmount":  2695,
+        "self":  false
+    },
+    {
+        "id":  "9c4f2f6b-0d06-41ee-b66c-316c31bdeaa1",
+        "name":  "בר יוסף",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "95121944",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  0,
+        "creationDate":  1761041067,
+        "lastUpdateDate":  1761041067,
+        "balanceAmount":  0,
+        "self":  false
+    },
+    {
+        "id":  "c9ee74df-abd0-4068-9ab5-d809ba4a0f20",
+        "name":  "בראלי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "c6616891",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  595,
+        "creationDate":  1761041421,
+        "lastUpdateDate":  1776609227,
+        "balanceAmount":  595,
+        "self":  false
+    },
+    {
+        "id":  "77f54aac-3f70-4530-a223-2239715b5867",
+        "name":  "דבורה נוי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "73930790",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  747.5,
+        "creationDate":  1737483154,
+        "lastUpdateDate":  1752349362,
+        "balanceAmount":  747.5,
+        "self":  false
+    },
+    {
+        "id":  "8c7a5ee1-5fca-4b9d-91f1-f0726843a408",
+        "name":  "דואני",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  true,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "84603184",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  520,
+        "creationDate":  1767527136,
+        "lastUpdateDate":  1776696334,
+        "balanceAmount":  520,
+        "self":  false
+    },
+    {
+        "id":  "92a35565-8ecf-4b93-9b6d-bc98c9aaf193",
+        "name":  "דנה חזן",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "94805035",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  730,
+        "creationDate":  1705777973,
+        "lastUpdateDate":  1719234191,
+        "balanceAmount":  730,
+        "self":  false
+    },
+    {
+        "id":  "8008fa4e-ac72-4b7b-8382-57efcf1bbd4a",
+        "name":  "דני לוי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "84195454",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  735,
+        "creationDate":  1761041617,
+        "lastUpdateDate":  1776696667,
+        "balanceAmount":  735,
+        "self":  false
+    },
+    {
+        "id":  "93aa62ef-b915-4795-a0d8-5e068c38586b",
+        "name":  "הילר",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "94838706",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  2293.5,
+        "creationDate":  1728373591,
+        "lastUpdateDate":  1776700252,
+        "balanceAmount":  2293.5,
+        "self":  false
+    },
+    {
+        "id":  "58da1ed6-baf1-4ea5-a913-2975d98c3cb0",
+        "name":  "וזיק",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "52911504",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  735,
+        "creationDate":  1761041851,
+        "lastUpdateDate":  1776609425,
+        "balanceAmount":  735,
+        "self":  false
+    },
+    {
+        "id":  "4fbc6b5f-20be-48dc-9cf4-f2d88792335e",
+        "name":  "חינוך בני שמעון",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "42612790",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  0,
+        "creationDate":  1735591163,
+        "lastUpdateDate":  1735591163,
+        "balanceAmount":  0,
+        "self":  false
+    },
+    {
+        "id":  "9189a5d8-9df5-48ba-95e0-b63d72be376f",
+        "name":  "חלוצית 1 בני נצרים",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  true,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "94768979",
+        "paymentTerms":  0,
+        "bankName":  "12",
+        "bankBranch":  "691",
+        "bankAccount":  "579156",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "phone":  "",
+        "emails":  [
+                       "bracha.rim@gmail.com"
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  18509,
+        "creationDate":  1629829714,
+        "lastUpdateDate":  1736410680,
+        "balanceAmount":  18509,
+        "self":  false
+    },
+    {
+        "id":  "a22f3831-f923-4960-b356-4fe8693e95d8",
+        "name":  "חלוצית 4",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "a5314461",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  5000,
+        "creationDate":  1730011006,
+        "lastUpdateDate":  1733084006,
+        "balanceAmount":  5000,
+        "self":  false
+    },
+    {
+        "id":  "4388ed2d-a389-46da-9431-1a92403d39dc",
+        "name":  "חנה גרוסי",
+        "nameAliases":  [
+
+                        ],
+        "active":  true,
+        "send":  false,
+        "department":  "",
+        "taxId":  "",
+        "accountingKey":  "42212983",
+        "paymentTerms":  0,
+        "bankName":  "",
+        "bankBranch":  "",
+        "bankAccount":  "",
+        "address":  "",
+        "city":  "",
+        "zip":  "",
+        "country":  "IL",
+        "emails":  [
+
+                   ],
+        "labels":  [
+
+                   ],
+        "remarks":  "",
+        "contactPerson":  "",
+        "incomeAmount":  0,
+        "paymentAmount":  715,
+        "creationDate":  1737483085,
+        "lastUpdateDate":  1752349289,
+        "balanceAmount":  715,
+        "self":  false
+    }
+]
