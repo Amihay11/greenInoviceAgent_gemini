@@ -28,7 +28,8 @@ pkg install -y nodejs git python make clang binutils
 step "Adding Termux x11 repository and installing Chromium"
 pkg install -y x11-repo
 pkg update -y          # must re-run after adding a new repo
-pkg install -y chromium
+# --fix-missing skips any packages whose mirror has a hash mismatch
+apt-get install -y --fix-missing chromium
 ok "System packages ready"
 
 # ── 2. clone or update repo ────────────────────────────────────────────────────
