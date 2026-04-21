@@ -6,14 +6,21 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REMINDERS_FILE = join(__dirname, 'reminders.json');
 
-// Notion client — only initialised if credentials are present
-const notion = process.env.NOTION_API_KEY
-  ? new NotionClient({ auth: process.env.NOTION_API_KEY })
-  : null;
+// Lazy — dotenv runs after ES module imports, so we read the env var at call time
+let _notion = undefined;
+function getNotion() {
+  if (_notion === undefined) {
+    _notion = process.env.NOTION_API_KEY
+      ? new NotionClient({ auth: process.env.NOTION_API_KEY })
+      : null;
+  }
+  return _notion;
+}
 
 // ── router ────────────────────────────────────────────────────────────────────
 
 export async function handleNoteCommand(msg, ai, modelName, waClient) {
+  const notion = getNotion();
   if (!notion) {
     await waClient.sendMessage(msg.from,
       '⚠️ NOTION_API_KEY not set in .env — note commands are disabled.');
@@ -57,7 +64,7 @@ async function fetchAllNotes() {
   const pages = [];
   let cursor;
   do {
-    const res = await notion.databases.query({
+    const res = await getNotion().databases.query({
       database_id: process.env.NOTION_NOTES_DB_ID,
       start_cursor: cursor,
       page_size: 100
@@ -101,7 +108,7 @@ async function saveNote(body, msg, ai, modelName, waClient) {
 
   const allTags = [...new Set([...userTags, ...autoTags])];
 
-  await notion.pages.create({
+  await getNotion().pages.create({
     parent: { database_id: process.env.NOTION_NOTES_DB_ID },
     properties: {
       Title:   { title:        [{ text: { content: title } }] },
