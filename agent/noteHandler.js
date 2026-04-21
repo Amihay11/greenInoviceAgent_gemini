@@ -75,6 +75,16 @@ async function fetchAllNotes() {
   return pages;
 }
 
+async function safeGetNotes(waClient, msg) {
+  try {
+    return await fetchAllNotes();
+  } catch (err) {
+    console.error('Notion fetch error:', err.message);
+    await waClient.sendMessage(msg.from, `❌ שגיאת Notion: ${err.message}`);
+    return null;
+  }
+}
+
 function pageToText(page) {
   const title = page.properties.Title?.title?.[0]?.plain_text || '(no title)';
   const content = page.properties.Content?.rich_text?.[0]?.plain_text || '';
@@ -90,7 +100,6 @@ async function saveNote(body, msg, ai, modelName, waClient) {
 
   const { tags: userTags, clean } = extractHashtags(body);
 
-  // Ask Gemini for a short title + auto-tags
   const metaRaw = await geminiText(ai, modelName,
     `You are a personal knowledge assistant. Given this note, return ONLY valid JSON with keys "title" (short Hebrew/English title, max 8 words) and "tags" (array of 2-3 relevant Hebrew or English tag strings, no # symbol).\n\nNote: "${clean}"`
   );
@@ -108,16 +117,22 @@ async function saveNote(body, msg, ai, modelName, waClient) {
 
   const allTags = [...new Set([...userTags, ...autoTags])];
 
-  await getNotion().pages.create({
-    parent: { database_id: process.env.NOTION_NOTES_DB_ID },
-    properties: {
-      Title:   { title:        [{ text: { content: title } }] },
-      Content: { rich_text:   [{ text: { content: clean } }] },
-      Tags:    { multi_select: allTags.map(t => ({ name: t })) },
-      Created: { date:         { start: new Date().toISOString() } },
-      Type:    { select:       { name: 'idea' } }
-    }
-  });
+  try {
+    await getNotion().pages.create({
+      parent: { database_id: process.env.NOTION_NOTES_DB_ID },
+      properties: {
+        Title:   { title:        [{ text: { content: title } }] },
+        Content: { rich_text:   [{ text: { content: clean } }] },
+        Tags:    { multi_select: allTags.map(t => ({ name: t })) },
+        Created: { date:         { start: new Date().toISOString() } },
+        Type:    { select:       { name: 'idea' } }
+      }
+    });
+  } catch (err) {
+    console.error('Notion save error:', err.message);
+    await waClient.sendMessage(msg.from, `❌ שגיאה בשמירה ל-Notion: ${err.message}`);
+    return;
+  }
 
   const tagStr = allTags.length ? ` | תגיות: ${allTags.join(', ')}` : '';
   await waClient.sendMessage(msg.from, `✅ נשמר: *${title}*${tagStr}`);
@@ -128,8 +143,8 @@ async function saveNote(body, msg, ai, modelName, waClient) {
 async function searchNotes(query, msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '🔍 מחפש ברעיונות שלך...');
 
-  const pages = await fetchAllNotes();
-  if (pages.length === 0) {
+  const pages = await safeGetNotes(waClient, msg);
+  if (!pages || pages.length === 0) {
     await waClient.sendMessage(msg.from, 'עדיין אין רעיונות שמורים.');
     return;
   }
@@ -154,7 +169,8 @@ async function getWeeklySummary(msg, ai, modelName, waClient) {
 }
 
 async function summariseByRange(msg, ai, modelName, waClient, range) {
-  const pages = await fetchAllNotes();
+  const pages = await safeGetNotes(waClient, msg);
+  if (!pages) return;
   const now = new Date();
   const cutoff = new Date(now);
   if (range === 'today') {
@@ -187,7 +203,8 @@ async function summariseByRange(msg, ai, modelName, waClient, range) {
 async function chatWithNotes(question, msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '💬 חושב על הרעיונות שלך...');
 
-  const pages = await fetchAllNotes();
+  const pages = await safeGetNotes(waClient, msg);
+  if (!pages) return;
   const notesText = pages.length
     ? pages.map(pageToText).join('\n')
     : '(אין רעיונות שמורים עדיין)';
