@@ -94,7 +94,8 @@ client.on('qr', async (qr) => {
       console.log('==========================================');
       console.log('WhatsApp → Linked Devices → Link with phone number\n');
     } catch (err) {
-      console.log('Could not get pairing code, falling back to QR:');
+      console.error('Pairing code error:', err.message || err);
+      console.log('Falling back to QR:');
       qrcode.generate(qr, { small: true });
     }
   } else {
