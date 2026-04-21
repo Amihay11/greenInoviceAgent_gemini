@@ -20,17 +20,19 @@ printf "${B}  GreenInvoice WhatsApp Agent — Android Setup${N}\n"
 printf "${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n"
 
 # ── 1. system packages ─────────────────────────────────────────────────────────
-step "Installing system packages (nodejs, chromium, git, build tools)"
+step "Switching to official Termux mirror (avoids hash-mismatch on third-party mirrors)"
+echo "deb https://packages-cf.termux.dev/apt/termux-main stable main" \
+  > "$PREFIX/etc/apt/sources.list"
 pkg update -y
 pkg install -y nodejs git python make clang binutils
+ok "System packages ready"
 
 # chromium lives in x11-repo — add the repo, refresh package lists, then install
 step "Adding Termux x11 repository and installing Chromium"
 pkg install -y x11-repo
-pkg update -y          # must re-run after adding a new repo
-# --fix-missing skips any packages whose mirror has a hash mismatch
-apt-get install -y --fix-missing chromium
-ok "System packages ready"
+pkg update -y
+pkg install -y chromium
+ok "Chromium installed"
 
 # ── 2. clone or update repo ────────────────────────────────────────────────────
 step "Setting up repository at $INSTALL_DIR"
