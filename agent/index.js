@@ -91,14 +91,7 @@ client.on('ready', () => {
 // Chat history per contact
 const chatHistories = new Map();
 
-client.on('message', async msg => {
-  if (msg.from === 'status@broadcast') return;
-
-  const msgText = msg.body.trim().toLowerCase();
-  if (!msgText.startsWith('morning command') && !msgText.startsWith('mc')) {
-    return; // Ignore messages not meant for this agent
-  }
-
+async function handleMorningCommand(msg) {
   const contact = await msg.getContact();
   const contactName = contact.pushname || contact.number || "User";
   console.log(`Received Morning Command message from ${contactName}: ${msg.body}`);
@@ -110,8 +103,7 @@ client.on('message', async msg => {
 
   try {
     console.log(`Sending WhatsApp message to Gemini...`);
-    
-    // Truly instant acknowledgement before the LLM even starts thinking
+
     await client.sendMessage(msg.from, "⏳ מעבד את הבקשה... (Processing...)");
 
     const chat = ai.chats.create({
@@ -125,23 +117,22 @@ client.on('message', async msg => {
 
     let result = await chat.sendMessage({ message: msg.body });
 
-    // Handle tool calls
     while (result.functionCalls && result.functionCalls.length > 0) {
       const functionCall = result.functionCalls[0];
       console.log(`Gemini is calling tool: ${functionCall.name}`);
-      
+
       try {
         const mcpResponse = await mcpClient.callTool({
           name: functionCall.name,
           arguments: functionCall.args
         });
-        
+
         let functionResponseData = { result: "Tool executed but no specific output returned." };
         if (mcpResponse.content && mcpResponse.content.length > 0) {
           try {
-             functionResponseData = JSON.parse(mcpResponse.content[0].text);
+            functionResponseData = JSON.parse(mcpResponse.content[0].text);
           } catch(e) {
-             functionResponseData = { result: mcpResponse.content[0].text };
+            functionResponseData = { result: mcpResponse.content[0].text };
           }
         } else if (mcpResponse.isError) {
           functionResponseData = { error: "The tool returned an error." };
@@ -170,17 +161,114 @@ client.on('message', async msg => {
     }
 
     const finalResponse = result.text;
-    
-    // Save updated history
+
     const updatedHistory = await chat.getHistory();
     chatHistories.set(msg.from, updatedHistory);
-    
-    // Reply on WhatsApp
+
     await client.sendMessage(msg.from, finalResponse);
 
   } catch (error) {
     console.error("Error processing message:", error);
     await client.sendMessage(msg.from, "Sorry, I encountered an error while processing your request.");
+  }
+}
+
+// wc sub-command: transcribe incoming voice/audio messages
+async function handleVoiceTranscription(msg) {
+  await client.sendMessage(msg.from, "⏳ מתמלל הודעה קולית... (Transcribing voice message...)");
+  try {
+    const media = await msg.downloadMedia();
+    if (!media) {
+      await client.sendMessage(msg.from, "Could not download audio.");
+      return;
+    }
+    const result = await ai.models.generateContent({
+      model: modelName,
+      contents: [{
+        parts: [
+          { inlineData: { mimeType: media.mimetype, data: media.data } },
+          { text: "Transcribe this voice message accurately. Reply with just the transcription, in the original language spoken." }
+        ]
+      }]
+    });
+    await client.sendMessage(msg.from, `📝 תמלול:\n${result.text || "(no transcription)"}`);
+  } catch (err) {
+    console.error("Voice transcription error:", err);
+    await client.sendMessage(msg.from, "Sorry, could not transcribe the voice message.");
+  }
+}
+
+// wc command: phone number → WhatsApp link
+async function handleWcCommand(msg) {
+  const commandBody = msg.body.trim().replace(/^wc\s*/i, '').trim();
+  const phoneRegex = /^[+\d][\d\s\-().]+$/;
+
+  if (phoneRegex.test(commandBody)) {
+    const digits = commandBody.replace(/\D/g, '');
+    const normalized = digits.startsWith('972') ? digits
+      : digits.startsWith('0') ? '972' + digits.slice(1)
+      : '972' + digits;
+    await client.sendMessage(msg.from, `https://wa.me/${normalized}`);
+  } else {
+    await client.sendMessage(msg.from, "Usage: wc <phone number> — e.g. wc 0545684800");
+  }
+}
+
+// gc command: general Gemini queries and image analysis
+async function handleGcCommand(msg) {
+  const commandBody = msg.body.trim().replace(/^gc\s*/i, '').trim();
+  const parts = [];
+
+  if (msg.hasMedia && msg.type === 'image') {
+    await client.sendMessage(msg.from, "⏳ מנתח תמונה... (Analyzing image...)");
+    const media = await msg.downloadMedia();
+    if (media) parts.push({ inlineData: { mimeType: media.mimetype, data: media.data } });
+  } else {
+    await client.sendMessage(msg.from, "⏳ מעבד... (Processing...)");
+  }
+
+  const prompt = commandBody.length > 0 ? commandBody
+    : parts.length > 0 ? "Analyze this image and describe or extract all visible text."
+    : null;
+
+  if (!prompt) {
+    await client.sendMessage(msg.from, "Usage: gc <question> or send an image with gc as caption.");
+    return;
+  }
+  parts.push({ text: prompt });
+
+  try {
+    const result = await ai.models.generateContent({
+      model: modelName,
+      contents: [{ parts }],
+      config: {
+        systemInstruction: "You are a helpful AI assistant. Reply in the same language as the user. Be concise."
+      }
+    });
+    await client.sendMessage(msg.from, result.text || "No response generated.");
+  } catch (err) {
+    console.error("GC command error:", err);
+    await client.sendMessage(msg.from, "Sorry, I encountered an error.");
+  }
+}
+
+client.on('message', async msg => {
+  if (msg.from === 'status@broadcast') return;
+
+  // Voice notes have no text body — auto-route to transcription
+  if (msg.type === 'ptt' || msg.type === 'audio') {
+    await handleVoiceTranscription(msg);
+    return;
+  }
+
+  const msgText = msg.body.trim().toLowerCase();
+
+  if (msgText.startsWith('mc') || msgText.startsWith('morning command')) {
+    await handleMorningCommand(msg);
+  } else if (msgText.startsWith('wc')) {
+    await handleWcCommand(msg);
+  } else if (msgText.startsWith('gc')) {
+    await handleGcCommand(msg);
   }
 });
 
