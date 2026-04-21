@@ -20,6 +20,10 @@ if (!process.env.GEMINI_API_KEY) {
   console.error("Error: GEMINI_API_KEY environment variable is not set. Please set it in a .env file.");
   process.exit(1);
 }
+if (!process.env.MCP_SERVER_PATH) {
+  console.error("Error: MCP_SERVER_PATH environment variable is not set. Please set it in a .env file.");
+  process.exit(1);
+}
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const modelName = 'gemini-2.5-flash';
@@ -31,8 +35,8 @@ let mcpTools = [];
 async function setupMCP() {
   console.log("Starting GreenInvoice MCP Server...");
   const transport = new StdioClientTransport({
-    command: "c:\\Users\\User\\Documents\\morningMCP\\node\\node-v20.12.2-win-x64\\node.exe",
-    args: ["c:\\Users\\User\\Documents\\morningMCP\\GreenInvoice-MCP-main\\dist\\index.js"],
+    command: process.env.NODE_EXECUTABLE || 'node',
+    args: [process.env.MCP_SERVER_PATH],
     env: {
       ...process.env,
       GREENINVOICE_API_ID: process.env.GREENINVOICE_API_ID,
@@ -71,12 +75,14 @@ async function setupMCP() {
 }
 
 // --- WhatsApp Setup ---
+const puppeteerConfig = { args: ['--no-sandbox'] };
+if (process.env.CHROME_EXECUTABLE_PATH) {
+  puppeteerConfig.executablePath = process.env.CHROME_EXECUTABLE_PATH;
+}
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: join(__dirname, 'whatsapp-auth') }),
-  puppeteer: {
-    executablePath: "c:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", // Fallback if needed, usually omitted to use bundled
-    args: ['--no-sandbox']
-  }
+  puppeteer: puppeteerConfig
 });
 
 client.on('qr', (qr) => {
