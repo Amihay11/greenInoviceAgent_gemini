@@ -52,6 +52,13 @@ Your WhatsApp
 | `wc` | Voice note (ptt/audio) | Transcribes voice to text via Gemini |
 | `gc what is X` | Any question | General Gemini answer (no invoicing tools) |
 | `gc` + image | Image with caption | Gemini analyzes / extracts text from image |
+| `note [text]` | Any idea/thought | Saves to Notion with auto-title and auto-tags |
+| `note search X` | Search query | Searches your notes via Gemini |
+| `note summary` | — | Summarizes today's notes |
+| `note weekly` | — | Summarizes this week's notes |
+| `note chat [question]` | Question | Gemini answers based on all your notes |
+| `note remind [when] [what]` | Natural language | Schedules a WhatsApp reminder |
+| `help` / `עזרה` | — | Shows all commands |
 
 ### `mc` — Morning Command (GreenInvoice)
 
@@ -90,6 +97,28 @@ gc what is the VAT rate in Israel?
 ```
 
 Send an image with caption `gc` or `gc extract text` → OCR / image analysis.
+
+### `note` — Personal Knowledge Management (Notion)
+
+Requires `NOTION_API_KEY` and `NOTION_NOTES_DB_ID` in `.env` — see [Notion Setup](#notion-setup).
+
+```
+note רעיון חדש על שיפור תהליך העבודה שלנו
+note רעיון חשוב #פיתוח #רעיונות
+note search תהליך עבודה
+note summary
+note weekly
+note chat מה הרעיונות שלי לגבי פיתוח?
+note remind מחר ב-9 לבדוק מייל
+```
+
+- Use `#hashtags` anywhere in the note text — Gemini also auto-generates tags and merges both.
+- Reminders use natural-language time expressions in Hebrew or English.
+- All notes are stored in Notion and visible/editable there too.
+
+### `help` / `עזרה`
+
+Returns the full command reference in Hebrew.
 
 ---
 
@@ -145,6 +174,7 @@ greenInoviceAgent_gemini/
 │
 ├── agent/
 │   ├── index.js            Main agent — router + all handlers
+│   ├── noteHandler.js      note command — Notion integration + reminders
 │   ├── package.json        Node.js dependencies
 │   └── .env.example        Template for all environment variables
 │
@@ -247,8 +277,39 @@ Copy `agent/.env.example` to `agent/.env` and fill in:
 | `NODE_EXECUTABLE` | — | Path to `node` binary. Defaults to `node` on PATH (correct for Android/Linux). Windows may need the full path. |
 | `CHROME_EXECUTABLE_PATH` | — | Path to Chrome/Chromium. Leave unset to use Puppeteer's bundled Chromium. |
 | `GREENINVOICE_SANDBOX` | — | Set to `true` to use the GreenInvoice sandbox environment. |
+| `NOTION_API_KEY` | — | Notion integration API key. Required for the `note` command. |
+| `NOTION_NOTES_DB_ID` | — | Notion database ID for storing notes. Required for the `note` command. |
 | `EMAIL_USER` | — | Gmail address for the optional email agent. |
 | `EMAIL_PASSWORD` | — | Gmail app password for the email agent. |
+
+---
+
+## Notion Setup
+
+The `note` command stores your ideas in a Notion database. One-time setup:
+
+1. Go to [https://www.notion.so/my-integrations](https://www.notion.so/my-integrations) → **New integration** → give it a name → **Submit**.
+2. Copy the **Internal Integration Token** (starts with `secret_`) → this is your `NOTION_API_KEY`.
+3. In Notion, create a new **full-page database** (not inline). Name it e.g. "Ideas & Notes".
+4. Add these properties to the database (exact names required):
+
+   | Property name | Type |
+   |--------------|------|
+   | `Title` | Title (default — rename if needed) |
+   | `Content` | Text |
+   | `Tags` | Multi-select |
+   | `Type` | Select |
+   | `Created` | Date |
+
+5. Open the database, click **...** (top-right) → **Add connections** → select your integration.
+6. Copy the **database ID** from the URL:  
+   `https://www.notion.so/workspace/`**`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`**`?v=...`  
+   This is your `NOTION_NOTES_DB_ID`.
+7. Add both values to `agent/.env`:
+   ```
+   NOTION_API_KEY=secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   NOTION_NOTES_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
 
 ---
 

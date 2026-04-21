@@ -10,6 +10,7 @@ import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
+import { handleNoteCommand, checkReminders } from './noteHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -294,8 +295,45 @@ client.on('message', async msg => {
     await handleWcCommand(msg);
   } else if (msgText.startsWith('gc')) {
     await handleGcCommand(msg);
+  } else if (msgText.startsWith('note')) {
+    await handleNoteCommand(msg, ai, modelName, client);
+  } else if (msgText === 'help' || msgText === 'עזרה') {
+    await handleHelpCommand(msg);
   }
 });
+
+// Start reminder polling after WhatsApp is ready
+client.on('ready', () => {
+  setInterval(() => checkReminders(client), 60 * 1000);
+});
+
+async function handleHelpCommand(msg) {
+  const text = `🤖 *פקודות הסוכן*
+
+*mc* — GreenInvoice (חשבוניות)
+  mc צור חשבונית ל...
+  mc רשימת לקוחות פתוחים
+
+*wc* — WhatsApp
+  wc 0541234567 ← קישור wa.me
+  הודעה קולית ← תמלול אוטומטי
+
+*gc* — בינה מלאכותית כללית
+  gc [שאלה כלשהי]
+  gc + תמונה ← חילוץ טקסט / ניתוח
+
+*note* — ניהול ידע (Notion)
+  note [רעיון] ← שמור רעיון
+  note [רעיון] #תגית1 #תגית2 ← עם תגיות
+  note search [נושא] ← חיפוש
+  note summary ← סיכום היום
+  note weekly ← סיכום השבוע
+  note chat [שאלה] ← שוחח על הרעיונות שלך
+  note remind [מחר ב-9] [מה] ← תזכורת
+
+*help / עזרה* — הצג הודעה זו`;
+  await client.sendMessage(msg.from, text);
+}
 
 // --- Email Setup ---
 let emailTransporter;

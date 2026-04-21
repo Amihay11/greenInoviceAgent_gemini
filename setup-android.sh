@@ -85,6 +85,16 @@ read -rsp "GreenInvoice API Secret       : " GI_SECRET; echo
 
 echo ""
 read -rp  "Your WhatsApp number (international, no + e.g. 972545684800): " WHATSAPP_PHONE
+
+echo ""
+printf "${Y}Optional: Notion credentials for the 'note' command${N}\n"
+printf "  (Get from https://www.notion.so/my-integrations — press Enter to skip)\n"
+read -rp  "Notion API key (secret_...)   : " NOTION_KEY
+NOTION_DB=""
+if [ -n "$NOTION_KEY" ]; then
+  read -rp  "Notion database ID            : " NOTION_DB
+fi
+
 read -rp  "Gmail address (Enter to skip) : " EMAIL_USER
 EMAIL_PASS=""
 if [ -n "$EMAIL_USER" ]; then
@@ -104,6 +114,11 @@ CHROME_EXECUTABLE_PATH=${CHROMIUM_BIN}
 ENABLE_WHATSAPP=true
 WHATSAPP_PHONE=${WHATSAPP_PHONE}
 ENVEOF
+
+if [ -n "$NOTION_KEY" ] && [ -n "$NOTION_DB" ]; then
+  printf "NOTION_API_KEY=%s\nNOTION_NOTES_DB_ID=%s\n" "$NOTION_KEY" "$NOTION_DB" \
+    >> "$INSTALL_DIR/agent/.env"
+fi
 
 if [ -n "$EMAIL_USER" ] && [ -n "$EMAIL_PASS" ]; then
   printf "EMAIL_USER=%s\nEMAIL_PASSWORD=%s\n" "$EMAIL_USER" "$EMAIL_PASS" \
@@ -148,8 +163,15 @@ printf "  1. Install Termux:Boot from F-Droid (NOT Play Store)\n"
 printf "  2. Open Termux:Boot once to activate it\n"
 printf "  3. Done — agent starts automatically on every reboot\n\n"
 printf "  Commands:\n"
-printf "    ${Y}mc${N}  <request>    — GreenInvoice / invoicing tasks\n"
-printf "    ${Y}wc${N}  <number>     — get a WhatsApp link (e.g. wc 0545684800)\n"
-printf "    ${Y}wc${N}  (voice note) — transcribe voice message to text\n"
-printf "    ${Y}gc${N}  <question>   — general AI query\n"
-printf "    ${Y}gc${N}  (+ image)    — extract / analyse image text\n\n"
+printf "    ${Y}mc${N}  <request>       — GreenInvoice / invoicing tasks\n"
+printf "    ${Y}wc${N}  <number>        — get a WhatsApp link (e.g. wc 0545684800)\n"
+printf "    ${Y}wc${N}  (voice note)    — transcribe voice message to text\n"
+printf "    ${Y}gc${N}  <question>      — general AI query\n"
+printf "    ${Y}gc${N}  (+ image)       — extract / analyse image text\n"
+printf "    ${Y}note${N} <idea>          — save idea to Notion\n"
+printf "    ${Y}note${N} search <query>  — search your notes\n"
+printf "    ${Y}note${N} summary         — today's notes summary\n"
+printf "    ${Y}note${N} weekly          — this week's notes summary\n"
+printf "    ${Y}note${N} chat <question> — chat about your notes\n"
+printf "    ${Y}note${N} remind <when> <what> — set a reminder\n"
+printf "    ${Y}help${N} / עזרה          — show all commands\n\n"
