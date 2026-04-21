@@ -60,6 +60,40 @@ async function geminiText(ai, modelName, prompt) {
   return res.text.trim();
 }
 
+// Detect the title property name (Notion uses 'Name' or 'Title' depending on how db was created)
+let _titleProp = null;
+async function getTitleProp() {
+  if (_titleProp) return _titleProp;
+  const db = await getNotion().databases.retrieve({ database_id: process.env.NOTION_NOTES_DB_ID });
+  const titleEntry = Object.entries(db.properties).find(([, v]) => v.type === 'title');
+  _titleProp = titleEntry ? titleEntry[0] : 'Name';
+  return _titleProp;
+}
+
+// Add any missing columns to the database automatically
+async function ensureSchema() {
+  const db = await getNotion().databases.retrieve({ database_id: process.env.NOTION_NOTES_DB_ID });
+  const existing = Object.keys(db.properties);
+  const toAdd = {};
+  if (!existing.includes('Content')) toAdd.Content = { rich_text: {} };
+  if (!existing.includes('Tags'))    toAdd.Tags    = { multi_select: { options: [] } };
+  if (!existing.includes('Type'))    toAdd.Type    = { select: { options: [] } };
+  if (!existing.includes('Created')) toAdd.Created = { date: {} };
+  if (Object.keys(toAdd).length > 0) {
+    await getNotion().databases.update({
+      database_id: process.env.NOTION_NOTES_DB_ID,
+      properties: toAdd
+    });
+  }
+}
+
+let _schemaReady = false;
+async function ensureSchemaOnce() {
+  if (_schemaReady) return;
+  await ensureSchema();
+  _schemaReady = true;
+}
+
 async function fetchAllNotes() {
   const pages = [];
   let cursor;
@@ -85,8 +119,8 @@ async function safeGetNotes(waClient, msg) {
   }
 }
 
-function pageToText(page) {
-  const title = page.properties.Title?.title?.[0]?.plain_text || '(no title)';
+function pageToText(page, titleProp = 'Name') {
+  const title = page.properties[titleProp]?.title?.[0]?.plain_text || '(no title)';
   const content = page.properties.Content?.rich_text?.[0]?.plain_text || '';
   const tags = (page.properties.Tags?.multi_select || []).map(t => t.name).join(', ');
   const date = page.properties.Created?.date?.start || '';
@@ -118,14 +152,16 @@ async function saveNote(body, msg, ai, modelName, waClient) {
   const allTags = [...new Set([...userTags, ...autoTags])];
 
   try {
+    await ensureSchemaOnce();
+    const titleProp = await getTitleProp();
     await getNotion().pages.create({
       parent: { database_id: process.env.NOTION_NOTES_DB_ID },
       properties: {
-        Title:   { title:        [{ text: { content: title } }] },
-        Content: { rich_text:   [{ text: { content: clean } }] },
-        Tags:    { multi_select: allTags.map(t => ({ name: t })) },
-        Created: { date:         { start: new Date().toISOString() } },
-        Type:    { select:       { name: 'idea' } }
+        [titleProp]: { title:      [{ text: { content: title } }] },
+        Content:     { rich_text:  [{ text: { content: clean } }] },
+        Tags:        { multi_select: allTags.map(t => ({ name: t })) },
+        Created:     { date:       { start: new Date().toISOString() } },
+        Type:        { select:     { name: 'idea' } }
       }
     });
   } catch (err) {
@@ -149,7 +185,8 @@ async function searchNotes(query, msg, ai, modelName, waClient) {
     return;
   }
 
-  const notesText = pages.map(pageToText).join('\n');
+  const tp = await getTitleProp();
+  const notesText = pages.map(p => pageToText(p, tp)).join('\n');
   const answer = await geminiText(ai, modelName,
     `You are a personal knowledge assistant. The user's saved notes:\n\n${notesText}\n\nUser query: "${query}"\n\nAnswer in the same language as the query. Be concise and cite note titles when relevant.`
   );
@@ -190,7 +227,8 @@ async function summariseByRange(msg, ai, modelName, waClient, range) {
     return;
   }
 
-  const notesText = filtered.map(pageToText).join('\n');
+  const tp = await getTitleProp();
+  const notesText = filtered.map(p => pageToText(p, tp)).join('\n');
   const label = range === 'today' ? 'היום' : 'השבוע האחרון';
   const summary = await geminiText(ai, modelName,
     `סכם את הרעיונות הבאים שנשמרו ${label}. כתוב בעברית, בצורה ברורה ומאורגנת עם נקודות:\n\n${notesText}`
@@ -205,8 +243,9 @@ async function chatWithNotes(question, msg, ai, modelName, waClient) {
 
   const pages = await safeGetNotes(waClient, msg);
   if (!pages) return;
+  const tp = await getTitleProp();
   const notesText = pages.length
-    ? pages.map(pageToText).join('\n')
+    ? pages.map(p => pageToText(p, tp)).join('\n')
     : '(אין רעיונות שמורים עדיין)';
 
   const answer = await geminiText(ai, modelName,
