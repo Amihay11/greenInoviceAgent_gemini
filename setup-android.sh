@@ -111,8 +111,8 @@ if [ -n "$EMAIL_USER" ] && [ -n "$EMAIL_PASS" ]; then
 fi
 ok ".env written to $INSTALL_DIR/agent/.env"
 
-# ── 8. create launcher ─────────────────────────────────────────────────────────
-step "Creating start.sh launcher"
+# ── 8. create launchers ────────────────────────────────────────────────────────
+step "Creating start.sh and start-background.sh launchers"
 cat > "$INSTALL_DIR/start.sh" <<'STARTEOF'
 #!/data/data/com.termux/files/usr/bin/bash
 cd "$(dirname "$0")/agent"
@@ -120,20 +120,36 @@ echo "Starting GreenInvoice WhatsApp Agent..."
 node index.js
 STARTEOF
 chmod +x "$INSTALL_DIR/start.sh"
-ok "Launcher created at $INSTALL_DIR/start.sh"
+chmod +x "$INSTALL_DIR/start-background.sh"
+chmod +x "$INSTALL_DIR/stop.sh"
+ok "Launchers created"
+
+# ── 9. set up Termux:Boot auto-start ───────────────────────────────────────────
+step "Setting up Termux:Boot auto-start"
+mkdir -p "$HOME/.termux/boot"
+cat > "$HOME/.termux/boot/start-agent.sh" <<BOOTEOF
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+$INSTALL_DIR/start-background.sh
+BOOTEOF
+chmod +x "$HOME/.termux/boot/start-agent.sh"
+ok "Boot script created at ~/.termux/boot/start-agent.sh"
 
 # ── done ───────────────────────────────────────────────────────────────────────
 printf "\n${G}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n"
 printf "${G}  Setup complete!${N}\n"
 printf "${G}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n\n"
-printf "  Start the agent:\n"
-printf "    ${Y}$INSTALL_DIR/start.sh${N}\n\n"
-printf "  On first run a QR code will appear in the terminal.\n"
-printf "  Open WhatsApp → Linked Devices → Link a Device and scan it.\n"
-printf "  Your session is saved — no QR code on subsequent runs.\n\n"
+printf "  Run now (foreground):   ${Y}$INSTALL_DIR/start.sh${N}\n"
+printf "  Run now (background):   ${Y}$INSTALL_DIR/start-background.sh${N}\n"
+printf "  Stop background agent:  ${Y}$INSTALL_DIR/stop.sh${N}\n"
+printf "  View logs:              ${Y}tail -f $INSTALL_DIR/agent.log${N}\n\n"
+printf "  ${Y}Auto-start on boot:${N}\n"
+printf "  1. Install Termux:Boot from F-Droid (NOT Play Store)\n"
+printf "  2. Open Termux:Boot once to activate it\n"
+printf "  3. Done — agent starts automatically on every reboot\n\n"
 printf "  Commands:\n"
-printf "    ${Y}mc${N}  <request>   — GreenInvoice / invoicing tasks\n"
-printf "    ${Y}wc${N}  <number>    — get a WhatsApp link (e.g. wc 0545684800)\n"
+printf "    ${Y}mc${N}  <request>    — GreenInvoice / invoicing tasks\n"
+printf "    ${Y}wc${N}  <number>     — get a WhatsApp link (e.g. wc 0545684800)\n"
 printf "    ${Y}wc${N}  (voice note) — transcribe voice message to text\n"
-printf "    ${Y}gc${N}  <question>  — general AI query\n"
-printf "    ${Y}gc${N}  (+ image)   — extract / analyse image text\n\n"
+printf "    ${Y}gc${N}  <question>   — general AI query\n"
+printf "    ${Y}gc${N}  (+ image)    — extract / analyse image text\n\n"
