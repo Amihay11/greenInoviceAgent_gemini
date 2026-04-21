@@ -24,9 +24,10 @@ step "Installing system packages (nodejs, chromium, git, build tools)"
 pkg update -y
 pkg install -y nodejs git python make clang binutils
 
-# chromium lives in the x11-repo — add it then install
+# chromium lives in x11-repo — add the repo, refresh package lists, then install
 step "Adding Termux x11 repository and installing Chromium"
 pkg install -y x11-repo
+pkg update -y          # must re-run after adding a new repo
 pkg install -y chromium
 ok "System packages ready"
 
