@@ -305,6 +305,11 @@ client.on('message', async msg => {
 // Start reminder polling after WhatsApp is ready
 client.on('ready', () => {
   setInterval(() => checkReminders(client), 60 * 1000);
+
+  if (process.env.WHATSAPP_PHONE) {
+    const me = `${process.env.WHATSAPP_PHONE}@c.us`;
+    client.sendMessage(me, '✅ הסוכן מוכן לפקודות').catch(console.error);
+  }
 });
 
 async function handleHelpCommand(msg) {
