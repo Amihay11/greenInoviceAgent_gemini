@@ -85,9 +85,22 @@ const client = new Client({
   puppeteer: puppeteerConfig
 });
 
-client.on('qr', (qr) => {
-  console.log('Scan the QR code below to authenticate with WhatsApp:');
-  qrcode.generate(qr, { small: true });
+client.on('qr', async (qr) => {
+  if (process.env.WHATSAPP_PHONE) {
+    try {
+      const code = await client.requestPairingCode(process.env.WHATSAPP_PHONE);
+      console.log('\n==========================================');
+      console.log(`  Pairing code: ${code}`);
+      console.log('==========================================');
+      console.log('WhatsApp → Linked Devices → Link with phone number\n');
+    } catch (err) {
+      console.log('Could not get pairing code, falling back to QR:');
+      qrcode.generate(qr, { small: true });
+    }
+  } else {
+    console.log('Scan the QR code below to authenticate with WhatsApp:');
+    qrcode.generate(qr, { small: true });
+  }
 });
 
 client.on('ready', () => {

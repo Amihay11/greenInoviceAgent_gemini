@@ -84,6 +84,7 @@ read -rsp "GreenInvoice API Secret       : " GI_SECRET; echo
 [ -z "$GI_SECRET" ] && err "GreenInvoice API Secret is required"
 
 echo ""
+read -rp  "Your WhatsApp number (international, no + e.g. 972545684800): " WHATSAPP_PHONE
 read -rp  "Gmail address (Enter to skip) : " EMAIL_USER
 EMAIL_PASS=""
 if [ -n "$EMAIL_USER" ]; then
@@ -101,6 +102,7 @@ GREENINVOICE_API_SECRET=${GI_SECRET}
 MCP_SERVER_PATH=${MCP_PATH}
 CHROME_EXECUTABLE_PATH=${CHROMIUM_BIN}
 ENABLE_WHATSAPP=true
+WHATSAPP_PHONE=${WHATSAPP_PHONE}
 ENVEOF
 
 if [ -n "$EMAIL_USER" ] && [ -n "$EMAIL_PASS" ]; then
