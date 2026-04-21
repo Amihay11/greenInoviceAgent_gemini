@@ -62,8 +62,11 @@ npm run build
 ok "MCP server built — $(ls dist/index.js)"
 
 # ── 5. locate chromium ─────────────────────────────────────────────────────────
-CHROMIUM_BIN="$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null || true)"
-[ -z "$CHROMIUM_BIN" ] && err "chromium not found on PATH. Did 'pkg install chromium' succeed?"
+CHROMIUM_BIN="$(which chromium-browser 2>/dev/null \
+  || which chromium 2>/dev/null \
+  || ls "$PREFIX/bin/chromium"* 2>/dev/null | head -1 \
+  || true)"
+[ -z "$CHROMIUM_BIN" ] && err "chromium not found. Run: ls \$PREFIX/bin/chromium* to check."
 ok "Chromium found at $CHROMIUM_BIN"
 
 # ── 6. collect credentials ─────────────────────────────────────────────────────
