@@ -20,6 +20,13 @@ function getNotion() {
 // ── router ────────────────────────────────────────────────────────────────────
 
 export async function handleNoteCommand(msg, ai, modelName, waClient) {
+  const body = msg.body.trim().replace(/^note\s*/i, '').trim();
+  const lower = body.toLowerCase();
+
+  // remind doesn't need Notion — handle it first
+  if (lower.startsWith('remind ')) return scheduleReminder(body.slice(7).trim(), msg, ai, modelName, waClient);
+
+  // all other sub-commands need Notion
   const notion = getNotion();
   if (!notion) {
     await waClient.sendMessage(msg.from,
@@ -32,14 +39,10 @@ export async function handleNoteCommand(msg, ai, modelName, waClient) {
     return;
   }
 
-  const body = msg.body.trim().replace(/^note\s*/i, '').trim();
-  const lower = body.toLowerCase();
-
   if (lower.startsWith('search '))  return searchNotes(body.slice(7).trim(), msg, ai, modelName, waClient);
   if (lower === 'summary')          return getDailySummary(msg, ai, modelName, waClient);
   if (lower === 'weekly')           return getWeeklySummary(msg, ai, modelName, waClient);
   if (lower.startsWith('chat '))    return chatWithNotes(body.slice(5).trim(), msg, ai, modelName, waClient);
-  if (lower.startsWith('remind '))  return scheduleReminder(body.slice(7).trim(), msg, ai, modelName, waClient);
   return saveNote(body, msg, ai, modelName, waClient);
 }
 
@@ -258,8 +261,9 @@ async function chatWithNotes(question, msg, ai, modelName, waClient) {
 
 async function scheduleReminder(text, msg, ai, modelName, waClient) {
   // Ask Gemini to parse the natural-language time expression
+  const nowIsrael = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const parsed = await geminiText(ai, modelName,
-    `Today is ${new Date().toISOString()}. The user wants to set a reminder: "${text}".\nReturn ONLY valid JSON: {"iso": "<ISO 8601 datetime>", "text": "<reminder text in original language>"}. No markdown.`
+    `Current date and time in Israel (Asia/Jerusalem, UTC+3): ${nowIsrael}. The user wants to set a reminder: "${text}".\nTreat any times the user mentions as Israel local time (UTC+3). Return ONLY valid JSON: {"iso": "<ISO 8601 datetime with +03:00 offset>", "text": "<reminder text in original language>"}. No markdown.`
   );
 
   let iso, reminderText;
