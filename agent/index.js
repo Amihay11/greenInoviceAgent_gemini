@@ -85,9 +85,14 @@ const client = new Client({
   puppeteer: puppeteerConfig
 });
 
+let pairingCodeRequested = false;
 client.on('qr', async (qr) => {
   if (process.env.WHATSAPP_PHONE) {
+    if (pairingCodeRequested) return;
+    pairingCodeRequested = true;
     try {
+      // Wait for WhatsApp's internal API to be ready before requesting
+      await new Promise(r => setTimeout(r, 3000));
       const code = await client.requestPairingCode(process.env.WHATSAPP_PHONE);
       console.log('\n==========================================');
       console.log(`  Pairing code: ${code}`);
