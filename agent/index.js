@@ -75,7 +75,7 @@ async function setupMCP() {
 }
 
 // --- WhatsApp Setup ---
-const puppeteerConfig = { args: ['--no-sandbox'] };
+const puppeteerConfig = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
 if (process.env.CHROME_EXECUTABLE_PATH) {
   puppeteerConfig.executablePath = process.env.CHROME_EXECUTABLE_PATH;
 }
