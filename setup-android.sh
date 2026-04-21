@@ -22,7 +22,12 @@ printf "${B}━━━━━━━━━━━━━━━━━━━━━━�
 # ── 1. system packages ─────────────────────────────────────────────────────────
 step "Installing system packages (nodejs, chromium, git, build tools)"
 pkg update -y
-pkg install -y nodejs chromium git python make clang binutils
+pkg install -y nodejs git python make clang binutils
+
+# chromium lives in the x11-repo — add it then install
+step "Adding Termux x11 repository and installing Chromium"
+pkg install -y x11-repo
+pkg install -y chromium
 ok "System packages ready"
 
 # ── 2. clone or update repo ────────────────────────────────────────────────────
