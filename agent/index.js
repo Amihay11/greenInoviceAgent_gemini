@@ -199,31 +199,6 @@ async function handleMorningCommand(msg) {
   }
 }
 
-// wc sub-command: transcribe incoming voice/audio messages
-async function handleVoiceTranscription(msg) {
-  await client.sendMessage(msg.from, "⏳ מתמלל הודעה קולית... (Transcribing voice message...)");
-  try {
-    const media = await msg.downloadMedia();
-    if (!media) {
-      await client.sendMessage(msg.from, "Could not download audio.");
-      return;
-    }
-    const result = await ai.models.generateContent({
-      model: modelName,
-      contents: [{
-        parts: [
-          { inlineData: { mimeType: media.mimetype, data: media.data } },
-          { text: "Transcribe this voice message accurately. Reply with just the transcription, in the original language spoken." }
-        ]
-      }]
-    });
-    await client.sendMessage(msg.from, `📝 תמלול:\n${result.text || "(no transcription)"}`);
-  } catch (err) {
-    console.error("Voice transcription error:", err);
-    await client.sendMessage(msg.from, "Sorry, could not transcribe the voice message.");
-  }
-}
-
 // wc command: phone number → WhatsApp link
 async function handleWcCommand(msg) {
   const commandBody = msg.body.trim().replace(/^wc\s*/i, '').trim();
@@ -336,7 +311,6 @@ async function handleHelpCommand(msg) {
 
 *wc* — כלי WhatsApp
   wc 0541234567 — קישור wa.me
-  הודעה קולית — תמלול ← (ישן, השתמש בתפריט החדש)
 
 *gc* — AI כללי
   gc [שאלה כלשהי]
