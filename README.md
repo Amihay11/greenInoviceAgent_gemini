@@ -359,6 +359,50 @@ No other files need to change.
 
 ---
 
+## Web Dashboard
+
+A lightweight browser-based GUI to control the agent — no extra npm packages required.
+
+### Start the dashboard
+
+```bash
+~/greenInoviceAgent/dashboard-start.sh
+```
+
+Then open **http://localhost:3001** in your phone's browser.
+
+To access from another device on the same Wi-Fi network, use your phone's LAN IP:
+```
+http://192.168.x.x:3001
+```
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| Status indicator | Pulsing green dot when running, shows PID + uptime |
+| Start / Stop / Restart | One-tap agent control |
+| Live log stream | New log lines appear in real time (Server-Sent Events) |
+| Download logs | Download the full `agent.log` file |
+| Auto-scroll | Pauses when you scroll up, resumes when you scroll back down |
+
+### Custom port
+
+```bash
+DASHBOARD_PORT=8080 ~/greenInoviceAgent/dashboard-start.sh
+```
+
+### Auto-start on boot
+
+The setup script already adds the dashboard to `~/.termux/boot/start-agent.sh` so it starts automatically alongside the agent on every reboot.
+
+To stop the dashboard manually:
+```bash
+kill $(cat ~/greenInoviceAgent/dashboard.pid)
+```
+
+---
+
 ## Adding New MCP Tools
 
 MCP tools live in `GreenInvoice-MCP-main/src/tools.ts`.
