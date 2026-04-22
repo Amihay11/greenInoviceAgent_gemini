@@ -1,5 +1,5 @@
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth, List } = pkg;
+const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode-terminal';
 import { GoogleGenAI } from '@google/genai';
 import { Client as MCPClient } from '@modelcontextprotocol/sdk/client/index.js';
@@ -10,7 +10,7 @@ import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
-import { handleNoteCommand, checkReminders, handleVoiceNote, handleVoiceListResponse } from './noteHandler.js';
+import { handleNoteCommand, checkReminders, handleVoiceNote, handleVoiceReply } from './noteHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -281,19 +281,16 @@ async function handleGcCommand(msg) {
 client.on('message', async msg => {
   if (msg.from === 'status@broadcast') return;
 
-  // Voice notes → show Menu 1 (no processing until user chooses)
+  // Voice notes → show Menu 1 immediately (no processing yet)
   if (msg.type === 'ptt' || msg.type === 'audio') {
-    await handleVoiceNote(msg, ai, modelName, client, List);
-    return;
-  }
-
-  // List menu responses (Menu 1 choice or Menu 2 save choice)
-  if (msg.type === 'list_response') {
-    await handleVoiceListResponse(msg, ai, modelName, client, List);
+    await handleVoiceNote(msg, ai, modelName, client);
     return;
   }
 
   const msgText = msg.body.trim().toLowerCase();
+
+  // Check if this is a numbered reply to a pending voice menu (Menu 1 or Menu 2)
+  if (await handleVoiceReply(msg, ai, modelName, client)) return;
 
   if (msgText.startsWith('mc') || msgText.startsWith('morning command')) {
     await handleMorningCommand(msg);
@@ -319,62 +316,34 @@ client.on('ready', () => {
 });
 
 async function handleHelpCommand(msg) {
-  const fallbackText = `🤖 *פקודות הסוכן*
+  const text = `🤖 *פקודות הסוכן*
 
-🎙️ *הודעה קולית* — תפריט אוטומטי: טקסט / ניתוח / חשיבה / הכל
+🎙️ *הודעה קולית* — שלח הודעה קולית ותקבל תפריט:
+  1️⃣ טקסט בלבד  2️⃣ ניתוח רעיונות  3️⃣ כיווני חשיבה  4️⃣ הכל
 
 *mc* — GreenInvoice (חשבוניות)
-  mc צור חשבונית ל...
+  mc צור חשבונית מס קבלה על סך 500 ל...
+  mc רשימת לקוחות
 
 *note* — ניהול ידע (Notion)
-  note [רעיון] | note search | note summary | note weekly | note chat | note remind
+  note [רעיון] — שמור רעיון עם תגיות אוטומטיות
+  note [רעיון] #תגית — עם תגיות ידניות
+  note search [נושא] — חיפוש
+  note summary — סיכום היום
+  note weekly — סיכום השבוע
+  note chat [שאלה] — שוחח על הרעיונות שלך
+  note remind [מחר ב-9] [מה לעשות] — תזכורת
 
-*wc* — קישור WhatsApp / תמלול קולי
-*gc* — AI כללי / ניתוח תמונה
+*wc* — כלי WhatsApp
+  wc 0541234567 — קישור wa.me
+  הודעה קולית — תמלול ← (ישן, השתמש בתפריט החדש)
+
+*gc* — AI כללי
+  gc [שאלה כלשהי]
+  gc + תמונה — OCR / ניתוח תמונה
+
 *help / עזרה* — הצג הודעה זו`;
-
-  try {
-    const helpList = new List(
-      'בחר נושא לפרטים נוספים:',
-      'צג פקודות',
-      [
-        {
-          title: '🎙️ הודעה קולית',
-          rows: [
-            { id: 'h_voice', title: '🎙️ שלח הודעה קולית', description: 'תפריט: טקסט / ניתוח / כיווני חשיבה / הכל' },
-          ]
-        },
-        {
-          title: '📊 GreenInvoice',
-          rows: [
-            { id: 'h_mc', title: 'mc — חשבוניות', description: 'יצירה, חיפוש, שליחה, תשלום' },
-          ]
-        },
-        {
-          title: '📋 ניהול ידע (Notion)',
-          rows: [
-            { id: 'h_note_save',   title: 'note [רעיון]',        description: 'שמור רעיון עם תגיות אוטומטיות' },
-            { id: 'h_note_search', title: 'note search [נושא]',   description: 'חיפוש ברעיונות שמורים' },
-            { id: 'h_note_sum',    title: 'note summary / weekly', description: 'סיכום יומי או שבועי' },
-            { id: 'h_note_chat',   title: 'note chat [שאלה]',     description: 'שוחח על הרעיונות שלך עם AI' },
-            { id: 'h_note_remind', title: 'note remind [מתי] [מה]', description: 'הגדר תזכורת בשפה טבעית' },
-          ]
-        },
-        {
-          title: '🔧 כלים',
-          rows: [
-            { id: 'h_wc', title: 'wc [מספר]', description: 'קישור wa.me לכל מספר ישראלי' },
-            { id: 'h_gc', title: 'gc [שאלה] / + תמונה', description: 'AI כללי, OCR, תרגום' },
-          ]
-        }
-      ],
-      '🤖 פקודות הסוכן',
-      'שלח הודעה קולית לניתוח אוטומטי'
-    );
-    await client.sendMessage(msg.from, helpList);
-  } catch (_) {
-    await client.sendMessage(msg.from, fallbackText);
-  }
+  await client.sendMessage(msg.from, text);
 }
 
 // --- Email Setup ---
