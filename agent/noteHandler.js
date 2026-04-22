@@ -6,6 +6,10 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REMINDERS_FILE = join(__dirname, 'reminders.json');
 
+// Session state for two-menu voice note pipeline
+const pendingVoiceMessages = new Map(); // chatId → original voice msg (waiting for Menu 1)
+const pendingVoiceResults  = new Map(); // chatId → { transcription, analysis, brainstorm } (waiting for Menu 2)
+
 // Lazy — dotenv runs after ES module imports, so we read the env var at call time
 let _notion = undefined;
 function getNotion() {
@@ -255,6 +259,176 @@ async function chatWithNotes(question, msg, ai, modelName, waClient) {
     `You are a personal knowledge assistant. Here are all the user's saved notes:\n\n${notesText}\n\nUser question: "${question}"\n\nAnswer thoughtfully in the same language as the question. Connect ideas, find patterns, and be insightful.`
   );
   await waClient.sendMessage(msg.from, answer);
+}
+
+// ── voice note pipeline ───────────────────────────────────────────────────────
+
+async function sendListOrText(waClient, chatId, listObj, fallbackText, List) {
+  try {
+    await waClient.sendMessage(chatId, new List(...listObj));
+  } catch (_) {
+    await waClient.sendMessage(chatId, fallbackText);
+  }
+}
+
+async function transcribeAndClean(media, ai, modelName) {
+  const raw = await ai.models.generateContent({
+    model: modelName,
+    contents: [{
+      parts: [
+        { inlineData: { mimeType: media.mimetype, data: media.data } },
+        { text: 'Transcribe this voice message accurately. Reply with just the transcription, in the original language spoken.' }
+      ]
+    }]
+  });
+  const rawText = raw.text.trim();
+
+  const cleaned = await ai.models.generateContent({
+    model: modelName,
+    contents: [{
+      parts: [{ text: `You are a transcription cleanup assistant. The text was captured by speech-to-text and may contain filler words (um, uh, er, like, you know), missing punctuation, false starts, and repetitions.\n\nClean it:\n1. Remove filler words unless they carry meaning\n2. Fix punctuation and add paragraph breaks where natural\n3. Fix grammar while preserving the speaker's exact meaning and tone\n4. Remove repetitions and false starts\n\nOutput ONLY the cleaned transcription — no commentary, no labels.\n\nText:\n${rawText}` }]
+    }]
+  });
+  return cleaned.text.trim();
+}
+
+async function analyzeIdeas(text, ai, modelName) {
+  return geminiText(ai, modelName,
+    `You are an idea extraction specialist. Analyze the following spoken notes and extract the key content. Respond in the SAME language as the input.\n\nFormat your response exactly like this:\n\n*עיקרי הרעיונות:*\n• [main idea 1]\n• [main idea 2]\n• ...\n\n*נושאים מרכזיים:*\n[2-3 themes in one line]\n\n*פעולות נדרשות:*\n• [action items, or "לא צוינו"]\n\nExtract only what is explicitly stated. Do not invent. Be concise.\n\nText:\n${text}`
+  );
+}
+
+async function brainstormIdeas(text, ai, modelName) {
+  return geminiText(ai, modelName,
+    `You are a Socratic thinking partner — your job is to expand thinking, not resolve it. Respond in the SAME language as the input.\n\nFormat your response exactly like this:\n\n*כיווני חשיבה נוספים:*\n• [non-obvious direction 1 — surprising, not cliché]\n• [non-obvious direction 2]\n• [non-obvious direction 3]\n\n*הנחה שכדאי לבחון:*\n[One hidden assumption embedded in the thinking, phrased as a question]\n\n*שאלה לחשוב עליה:*\n[One Socratic question that deepens or challenges the core idea — do NOT answer it]\n\nBe concise, non-obvious, and intellectually stimulating.\n\nText:\n${text}`
+  );
+}
+
+export async function handleVoiceNote(msg, ai, modelName, waClient, List) {
+  pendingVoiceMessages.set(msg.from, msg);
+  await sendListOrText(waClient, msg.from,
+    [
+      '🎙️ קיבלתי הודעה קולית — מה לעשות?',
+      'בחר פעולה',
+      [{
+        title: 'אפשרויות עיבוד',
+        rows: [
+          { id: 'voice_text',       title: '📝 המרה לטקסט בלבד',          description: 'תמלול נקי ללא ניתוח' },
+          { id: 'voice_analyze',    title: '🧠 ניתוח ועיקרי רעיונות',      description: 'חילוץ נקודות מרכזיות' },
+          { id: 'voice_brainstorm', title: '💡 כיווני חשיבה נוספים',        description: 'הרחבת הרעיון בשאלות סוקרטיות' },
+          { id: 'voice_full',       title: '🚀 הכל — טקסט + ניתוח + חשיבה', description: 'עיבוד מלא' },
+        ]
+      }],
+      '🎙️ הודעה קולית',
+      ''
+    ],
+    '🎙️ קיבלתי הודעה קולית. מה לעשות?\n1. המרה לטקסט\n2. ניתוח רעיונות\n3. כיווני חשיבה\n4. הכל\n\nשלח מספר 1-4',
+    List
+  );
+}
+
+export async function handleVoiceListResponse(msg, ai, modelName, waClient, List) {
+  const id = msg.selectedRowId || msg.body;
+
+  // ── Menu 2 response (save/skip after analysis) ────────────────────────────
+  if (pendingVoiceResults.has(msg.from)) {
+    const { transcription, analysis, brainstorm } = pendingVoiceResults.get(msg.from);
+    pendingVoiceResults.delete(msg.from);
+
+    if (id === 'save_transcript') {
+      await saveNote(transcription, msg, ai, modelName, waClient);
+    } else if (id === 'skip') {
+      await waClient.sendMessage(msg.from, '👍 בסדר, לא נשמר.');
+    } else {
+      // save_full or any other selection → save everything
+      const fullContent = [
+        transcription,
+        analysis   ? `\n\n--- ניתוח ---\n${analysis}`       : '',
+        brainstorm ? `\n\n--- כיווני חשיבה ---\n${brainstorm}` : '',
+      ].join('');
+      await saveNote(fullContent, msg, ai, modelName, waClient);
+    }
+    return;
+  }
+
+  // ── Menu 1 response (choose processing type) ──────────────────────────────
+  if (!pendingVoiceMessages.has(msg.from)) return;
+  const voiceMsg = pendingVoiceMessages.get(msg.from);
+  pendingVoiceMessages.delete(msg.from);
+
+  await waClient.sendMessage(msg.from, '⏳ מעבד את ההודעה הקולית...');
+
+  let media;
+  try {
+    media = await voiceMsg.downloadMedia();
+    if (!media) throw new Error('Could not download audio');
+  } catch (err) {
+    await waClient.sendMessage(msg.from, `❌ שגיאה בהורדת ההודעה הקולית: ${err.message}`);
+    return;
+  }
+
+  let transcription, analysis, brainstorm;
+  try {
+    transcription = await transcribeAndClean(media, ai, modelName);
+  } catch (err) {
+    await waClient.sendMessage(msg.from, `❌ שגיאה בתמלול: ${err.message}`);
+    return;
+  }
+
+  if (id === 'voice_text') {
+    await waClient.sendMessage(msg.from, `📝 *תמלול:*\n${transcription}`);
+    await waClient.sendMessage(msg.from, `לשמירה ב-Notion שלח:\n_note ${transcription.slice(0, 100)}..._`);
+    return;
+  }
+
+  // Run chosen agents
+  try {
+    if (id === 'voice_full') {
+      [analysis, brainstorm] = await Promise.all([
+        analyzeIdeas(transcription, ai, modelName),
+        brainstormIdeas(transcription, ai, modelName),
+      ]);
+    } else if (id === 'voice_analyze') {
+      analysis = await analyzeIdeas(transcription, ai, modelName);
+    } else if (id === 'voice_brainstorm') {
+      brainstorm = await brainstormIdeas(transcription, ai, modelName);
+    }
+  } catch (err) {
+    await waClient.sendMessage(msg.from, `❌ שגיאה בניתוח: ${err.message}`);
+    return;
+  }
+
+  // Build and send results
+  const parts = [`📝 *תמלול:*\n${transcription}`];
+  if (analysis)   parts.push(`\n🧠 *ניתוח:*\n${analysis}`);
+  if (brainstorm) parts.push(`\n💡 *כיווני חשיבה:*\n${brainstorm}`);
+  await waClient.sendMessage(msg.from, parts.join('\n'));
+
+  // Store results and show Menu 2
+  pendingVoiceResults.set(msg.from, { transcription, analysis, brainstorm });
+  await sendListOrText(waClient, msg.from,
+    [
+      'מה תרצה לעשות עם הניתוח?',
+      'בחר פעולה',
+      [
+        {
+          title: 'שמירה ל-Notion',
+          rows: [
+            { id: 'save_full',       title: '💾 שמור ניתוח מלא',    description: 'תמלול + עיקרים + כיווני חשיבה' },
+            { id: 'save_transcript', title: '📝 שמור תמלול בלבד',   description: 'רק הטקסט הנקי' },
+          ]
+        },
+        {
+          title: 'ביטול',
+          rows: [{ id: 'skip', title: '❌ לא לשמור', description: '' }]
+        }
+      ],
+      '📋 שמירה ל-Notion?',
+      ''
+    ],
+    '💾 לשמירה ל-Notion שלח:\n_save_ — ניתוח מלא\n_transcript_ — תמלול בלבד\n_skip_ — לא לשמור',
+    List
+  );
 }
 
 // ── reminders ────────────────────────────────────────────────────────────────
