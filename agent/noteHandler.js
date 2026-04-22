@@ -136,7 +136,7 @@ function pageToText(page, titleProp = 'Name') {
 
 // ── save note ─────────────────────────────────────────────────────────────────
 
-async function saveNote(body, msg, ai, modelName, waClient) {
+export async function saveNote(body, msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '💾 שומר רעיון...');
 
   const { tags: userTags, clean } = extractHashtags(body);
@@ -183,7 +183,7 @@ async function saveNote(body, msg, ai, modelName, waClient) {
 
 // ── search notes ──────────────────────────────────────────────────────────────
 
-async function searchNotes(query, msg, ai, modelName, waClient) {
+export async function searchNotes(query, msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '🔍 מחפש ברעיונות שלך...');
 
   const pages = await safeGetNotes(waClient, msg);
@@ -202,12 +202,12 @@ async function searchNotes(query, msg, ai, modelName, waClient) {
 
 // ── summaries ─────────────────────────────────────────────────────────────────
 
-async function getDailySummary(msg, ai, modelName, waClient) {
+export async function getDailySummary(msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '📋 מכין סיכום יומי...');
   await summariseByRange(msg, ai, modelName, waClient, 'today');
 }
 
-async function getWeeklySummary(msg, ai, modelName, waClient) {
+export async function getWeeklySummary(msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '📋 מכין סיכום שבועי...');
   await summariseByRange(msg, ai, modelName, waClient, 'week');
 }
@@ -245,7 +245,7 @@ async function summariseByRange(msg, ai, modelName, waClient, range) {
 
 // ── chat with notes ───────────────────────────────────────────────────────────
 
-async function chatWithNotes(question, msg, ai, modelName, waClient) {
+export async function chatWithNotes(question, msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, '💬 חושב על הרעיונות שלך...');
 
   const pages = await safeGetNotes(waClient, msg);
@@ -437,7 +437,7 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
 
 // ── reminders ────────────────────────────────────────────────────────────────
 
-async function scheduleReminder(text, msg, ai, modelName, waClient) {
+export async function scheduleReminder(text, msg, ai, modelName, waClient) {
   // Ask Gemini to parse the natural-language time expression
   const nowIsrael = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
   const parsed = await geminiText(ai, modelName,

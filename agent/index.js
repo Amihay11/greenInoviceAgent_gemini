@@ -10,7 +10,10 @@ import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
-import { handleNoteCommand, checkReminders, handleVoiceNote, handleVoiceReply } from './noteHandler.js';
+import {
+  handleNoteCommand, checkReminders, handleVoiceNote, handleVoiceReply,
+  saveNote, searchNotes, getDailySummary, getWeeklySummary, chatWithNotes, scheduleReminder
+} from './noteHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -117,6 +120,100 @@ client.on('ready', () => {
 // Chat history per contact
 const chatHistories = new Map();
 
+// ── Intent classification ──────────────────────────────────────────────────────
+
+const pendingIntentConfirm = new Map(); // chatId → { options, originalMsg, msgText }
+
+const INTENT_LABEL = {
+  invoice:           '📊 GreenInvoice — חשבוניות ולקוחות',
+  note_save:         '📝 שמור כהערה ב-Notion',
+  note_search:       '🔍 חפש ברשימות שמורות',
+  note_summary_day:  '📋 סיכום הרשימות של היום',
+  note_summary_week: '📋 סיכום הרשימות של השבוע',
+  note_chat:         '💬 שוחח על הרשימות שלך',
+  note_remind:       '⏰ קביעת תזכורת',
+  general:           '🤖 שאל AI',
+};
+
+async function classifyIntent(text, ai, modelName) {
+  const res = await ai.models.generateContent({
+    model: modelName,
+    contents: [{ parts: [{ text: `Classify this WhatsApp message into exactly one category. Reply with ONLY the category name, nothing else.
+
+Categories:
+- invoice: GreenInvoice tasks — creating invoices, receipts, tax documents, listing clients or documents
+- note_remind: setting a reminder for a specific future time
+- note_search: searching through saved notes or ideas
+- note_summary_day: summarizing today's saved notes
+- note_summary_week: summarizing this week's saved notes
+- note_chat: asking a question about or discussing saved notes
+- note_save: saving a new idea, thought, or memo
+- general: any other question, request, or conversation
+
+Message: "${text.slice(0, 400)}"` }] }]
+  });
+  const clean = ((res.text || '').trim().toLowerCase()).replace(/[^a-z_]/g, '');
+  return INTENT_LABEL[clean] ? clean : 'general';
+}
+
+function buildConfirmMenu(intent) {
+  const primary = INTENT_LABEL[intent];
+  const alts = ['note_save', 'invoice', 'general']
+    .filter(k => k !== intent)
+    .map(k => ({ key: k, label: INTENT_LABEL[k] }))
+    .slice(0, 2);
+
+  const opts = [intent, ...alts.map(o => o.key), 'cancel'];
+  const lines = [
+    `1️⃣  ${primary}`,
+    ...alts.map((o, i) => `${i + 2}️⃣  ${o.label}`),
+    `${opts.length}️⃣  ❌ ביטול`,
+  ];
+
+  return {
+    options: opts,
+    menuText: `🤖 הבנתי — מה לעשות?\n\n${lines.join('\n')}\n\nשלח מספר 1–${opts.length}`,
+  };
+}
+
+async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClient) {
+  const needsNotion = ['note_save', 'note_search', 'note_summary_day', 'note_summary_week', 'note_chat'];
+  if (needsNotion.includes(intent) && (!process.env.NOTION_API_KEY || !process.env.NOTION_NOTES_DB_ID)) {
+    await waClient.sendMessage(originalMsg.from, '⚠️ Notion לא מוגדר — הוסף NOTION_API_KEY ו-NOTION_NOTES_DB_ID ל-.env');
+    return;
+  }
+  switch (intent) {
+    case 'invoice':           await handleMorningCommand(originalMsg); break;
+    case 'note_save':         await saveNote(msgText, originalMsg, ai, modelName, waClient); break;
+    case 'note_search':       await searchNotes(msgText, originalMsg, ai, modelName, waClient); break;
+    case 'note_summary_day':  await getDailySummary(originalMsg, ai, modelName, waClient); break;
+    case 'note_summary_week': await getWeeklySummary(originalMsg, ai, modelName, waClient); break;
+    case 'note_chat':         await chatWithNotes(msgText, originalMsg, ai, modelName, waClient); break;
+    case 'note_remind':       await scheduleReminder(msgText, originalMsg, ai, modelName, waClient); break;
+    default:                  await handleGcCommand(originalMsg);
+  }
+}
+
+async function handleIntentConfirm(msg, ai, modelName, waClient) {
+  if (!pendingIntentConfirm.has(msg.from)) return false;
+  const choice = msg.body.trim();
+  if (!/^\d$/.test(choice)) {
+    pendingIntentConfirm.delete(msg.from);
+    return false; // treat as a new message
+  }
+
+  const { options, originalMsg, msgText } = pendingIntentConfirm.get(msg.from);
+  pendingIntentConfirm.delete(msg.from);
+
+  const intent = options[parseInt(choice, 10) - 1];
+  if (!intent || intent === 'cancel') {
+    await waClient.sendMessage(msg.from, '👍 ביטול.');
+    return true;
+  }
+  await executeIntent(intent, msgText, originalMsg, ai, modelName, waClient);
+  return true;
+}
+
 async function handleMorningCommand(msg) {
   const contact = await msg.getContact();
   const contactName = contact.pushname || contact.number || "User";
@@ -199,25 +296,9 @@ async function handleMorningCommand(msg) {
   }
 }
 
-// wc command: phone number → WhatsApp link
-async function handleWcCommand(msg) {
-  const commandBody = msg.body.trim().replace(/^wc\s*/i, '').trim();
-  const phoneRegex = /^[+\d][\d\s\-().]+$/;
-
-  if (phoneRegex.test(commandBody)) {
-    const digits = commandBody.replace(/\D/g, '');
-    const normalized = digits.startsWith('972') ? digits
-      : digits.startsWith('0') ? '972' + digits.slice(1)
-      : '972' + digits;
-    await client.sendMessage(msg.from, `https://wa.me/${normalized}`);
-  } else {
-    await client.sendMessage(msg.from, "Usage: wc <phone number> — e.g. wc 0545684800");
-  }
-}
-
 // gc command: general Gemini queries and image analysis
 async function handleGcCommand(msg) {
-  const commandBody = msg.body.trim().replace(/^gc\s*/i, '').trim();
+  const commandBody = msg.body.trim();
   const parts = [];
 
   if (msg.hasMedia && msg.type === 'image') {
@@ -256,28 +337,49 @@ async function handleGcCommand(msg) {
 client.on('message', async msg => {
   if (msg.from === 'status@broadcast') return;
 
-  // Voice notes → show Menu 1 immediately (no processing yet)
+  // Voice notes → pipeline menu immediately (no processing yet)
   if (msg.type === 'ptt' || msg.type === 'audio') {
     await handleVoiceNote(msg, ai, modelName, client);
     return;
   }
 
-  const msgText = msg.body.trim().toLowerCase();
-
-  // Check if this is a numbered reply to a pending voice menu (Menu 1 or Menu 2)
+  // Pending voice menu replies (Menu 1 and Menu 2)
   if (await handleVoiceReply(msg, ai, modelName, client)) return;
 
-  if (msgText.startsWith('mc') || msgText.startsWith('morning command')) {
-    await handleMorningCommand(msg);
-  } else if (msgText.startsWith('wc')) {
-    await handleWcCommand(msg);
-  } else if (msgText.startsWith('gc')) {
-    await handleGcCommand(msg);
-  } else if (msgText.startsWith('note')) {
-    await handleNoteCommand(msg, ai, modelName, client);
-  } else if (msgText === 'help' || msgText === 'עזרה') {
+  // Pending intent confirmation menu
+  if (await handleIntentConfirm(msg, ai, modelName, client)) return;
+
+  const msgText = msg.body.trim();
+  const lower = msgText.toLowerCase();
+
+  if (lower === 'help' || lower === 'עזרה') {
     await handleHelpCommand(msg);
+    return;
   }
+
+  // Image → analyze directly (intent is unambiguous)
+  if (msg.hasMedia && msg.type === 'image') {
+    await handleGcCommand(msg);
+    return;
+  }
+
+  // Bare phone number → wa.me link directly
+  const digits = msgText.replace(/\D/g, '');
+  if (/^[+\d][\d\s\-(). ]+$/.test(msgText) && digits.length >= 7 && digits.length <= 15) {
+    const normalized = digits.startsWith('972') ? digits
+      : digits.startsWith('0') ? '972' + digits.slice(1)
+      : '972' + digits;
+    await client.sendMessage(msg.from, `https://wa.me/${normalized}`);
+    return;
+  }
+
+  // Classify intent → show confirmation menu
+  let intent = 'general';
+  try { intent = await classifyIntent(msgText, ai, modelName); } catch (_) {}
+
+  const { options, menuText } = buildConfirmMenu(intent);
+  pendingIntentConfirm.set(msg.from, { options, originalMsg: msg, msgText });
+  await client.sendMessage(msg.from, menuText);
 });
 
 // Start reminder polling after WhatsApp is ready
@@ -291,32 +393,28 @@ client.on('ready', () => {
 });
 
 async function handleHelpCommand(msg) {
-  const text = `🤖 *פקודות הסוכן*
+  const text = `🤖 *הסוכן החכם שלך*
+פשוט כתוב מה שאתה רוצה — הסוכן יבין ויציע תפריט.
 
-🎙️ *הודעה קולית* — שלח הודעה קולית ותקבל תפריט:
-  1️⃣ טקסט בלבד  2️⃣ ניתוח רעיונות  3️⃣ כיווני חשיבה  4️⃣ הכל
+🎙️ *הודעה קולית* — שלח ותקבל תפריט:
+  תמלול • ניתוח • כיווני חשיבה • הכל
 
-*mc* — GreenInvoice (חשבוניות)
-  mc צור חשבונית מס קבלה על סך 500 ל...
-  mc רשימת לקוחות
+📊 *GreenInvoice* — לדוגמה:
+  "צור חשבונית מס קבלה על 500 לישראל ישראלי"
+  "רשימת לקוחות"
 
-*note* — ניהול ידע (Notion)
-  note [רעיון] — שמור רעיון עם תגיות אוטומטיות
-  note [רעיון] #תגית — עם תגיות ידניות
-  note search [נושא] — חיפוש
-  note summary — סיכום היום
-  note weekly — סיכום השבוע
-  note chat [שאלה] — שוחח על הרעיונות שלך
-  note remind [מחר ב-9] [מה לעשות] — תזכורת
+📋 *Notion* — לדוגמה:
+  "שמור רעיון על..."
+  "חפש רשימות בנושא..."
+  "תן לי סיכום של היום"
+  "קבע תזכורת למחר ב-9 ל..."
 
-*wc* — כלי WhatsApp
-  wc 0541234567 — קישור wa.me
+🤖 *AI כללי* — כל שאלה חופשית
+  + תמונה — OCR / ניתוח תמונה
 
-*gc* — AI כללי
-  gc [שאלה כלשהי]
-  gc + תמונה — OCR / ניתוח תמונה
+📱 *קישור WhatsApp* — שלח מספר טלפון בלבד
 
-*help / עזרה* — הצג הודעה זו`;
+*עזרה / help* — הצג הודעה זו`;
   await client.sendMessage(msg.from, text);
 }
 
