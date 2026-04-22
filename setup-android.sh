@@ -137,6 +137,7 @@ STARTEOF
 chmod +x "$INSTALL_DIR/start.sh"
 chmod +x "$INSTALL_DIR/start-background.sh"
 chmod +x "$INSTALL_DIR/stop.sh"
+chmod +x "$INSTALL_DIR/dashboard-start.sh"
 ok "Launchers created"
 
 # ── 9. set up Termux:Boot auto-start ───────────────────────────────────────────
@@ -146,6 +147,7 @@ cat > "$HOME/.termux/boot/start-agent.sh" <<BOOTEOF
 #!/data/data/com.termux/files/usr/bin/bash
 termux-wake-lock
 $INSTALL_DIR/start-background.sh
+$INSTALL_DIR/dashboard-start.sh
 BOOTEOF
 chmod +x "$HOME/.termux/boot/start-agent.sh"
 ok "Boot script created at ~/.termux/boot/start-agent.sh"
