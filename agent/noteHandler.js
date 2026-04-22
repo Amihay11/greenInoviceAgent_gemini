@@ -265,16 +265,18 @@ export async function chatWithNotes(question, msg, ai, modelName, waClient) {
 
 const MENU1_TEXT = `🎙️ קיבלתי הודעה קולית — מה לעשות?
 
-1️⃣ המרה לטקסט בלבד
-2️⃣ ניתוח ועיקרי רעיונות
-3️⃣ כיווני חשיבה נוספים
-4️⃣ הכל (טקסט + ניתוח + חשיבה)
+1️⃣ תמלול בלבד
+2️⃣ ניתוח מעשי — משימות ורעיונות
+3️⃣ שותף יצירתי — לתוכן שירי ומטפורי
+4️⃣ הרחבת חשיבה — זוויות ורעיונות
+5️⃣ משימות בלבד — רשימה נקייה
+6️⃣ הכל — ניתוח + יצירתי + הרחבה
 
-שלח מספר 1-4`;
+שלח מספר 1-6`;
 
 const MENU2_TEXT = `💾 שמור ל-Notion?
 
-1️⃣ שמור ניתוח מלא
+1️⃣ שמור הכל
 2️⃣ שמור תמלול בלבד
 3️⃣ לא לשמור
 
@@ -323,6 +325,34 @@ ${text}`
   );
 }
 
+async function creativePartner(text, ai, modelName) {
+  return geminiText(ai, modelName,
+    `You are a creative writing partner with deep literary sensitivity. The input is a spoken thought — possibly poetic, metaphorical, or emotionally charged. Respond in the SAME language as the input.
+
+Your response should feel like creative dialogue, not analysis.
+
+Format exactly like this (keep Hebrew labels):
+
+*הד:*
+[Reflect the core image back in fresh language — one sentence or phrase that amplifies without explaining. Stay in the same emotional register.]
+
+*פיתוח:*
+• [An unexpected extension of the metaphor or theme]
+• [An alternative image or resonant angle]
+
+*שורה להמשך:*
+[One line that could naturally continue or follow the original thought]
+
+Rules:
+- DO NOT analyze, explain, or moralize.
+- Match the tone exactly: if lyrical — be lyrical; if raw — be raw; if playful — be playful.
+- The goal is creative resonance, not critique.
+
+Text:
+${text}`
+  );
+}
+
 async function brainstormIdeas(text, ai, modelName) {
   return geminiText(ai, modelName,
     `You are a helpful thinking partner. Read these notes and offer practical perspectives. Respond in the SAME language as the input.
@@ -348,6 +378,23 @@ ${text}`
   );
 }
 
+async function actionsOnly(text, ai, modelName) {
+  return geminiText(ai, modelName,
+    `Extract ONLY the concrete actionable tasks from these spoken notes. Respond in the SAME language as the input.
+
+Output ONLY a bullet list — nothing else:
+• [action 1]
+• [action 2]
+
+If no concrete actions are mentioned, write exactly: "לא צוינו פעולות."
+
+Zero analysis, zero interpretation, zero themes — only physically doable actions.
+
+Notes:
+${text}`
+  );
+}
+
 export async function handleVoiceNote(msg, ai, modelName, waClient) {
   pendingVoiceMessages.set(msg.from, msg);
   await waClient.sendMessage(msg.from, MENU1_TEXT);
@@ -359,7 +406,7 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
 
   // ── Menu 2 response ────────────────────────────────────────────────────────
   if (pendingVoiceResults.has(msg.from)) {
-    const { transcription, analysis, brainstorm } = pendingVoiceResults.get(msg.from);
+    const { transcription, analysis, creative, brainstorm, actions } = pendingVoiceResults.get(msg.from);
     pendingVoiceResults.delete(msg.from);
 
     if (choice === '2') {
@@ -369,8 +416,10 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
     } else {
       const fullContent = [
         transcription,
-        analysis   ? `\n\n--- ניתוח ---\n${analysis}`         : '',
-        brainstorm ? `\n\n--- כיווני חשיבה ---\n${brainstorm}` : '',
+        analysis   ? `\n\n--- ניתוח ---\n${analysis}`           : '',
+        creative   ? `\n\n--- שותף יצירתי ---\n${creative}`     : '',
+        brainstorm ? `\n\n--- הרחבת חשיבה ---\n${brainstorm}`   : '',
+        actions    ? `\n\n--- משימות ---\n${actions}`           : '',
       ].join('');
       await saveNote(fullContent, msg, ai, modelName, waClient);
     }
@@ -379,7 +428,7 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
 
   // ── Menu 1 response ────────────────────────────────────────────────────────
   if (!pendingVoiceMessages.has(msg.from)) return false;
-  if (!['1','2','3','4'].includes(choice)) return false;
+  if (!['1','2','3','4','5','6'].includes(choice)) return false;
 
   const voiceMsg = pendingVoiceMessages.get(msg.from);
   pendingVoiceMessages.delete(msg.from);
@@ -395,7 +444,7 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
     return true;
   }
 
-  let transcription, analysis, brainstorm;
+  let transcription;
   try {
     transcription = await transcribeAndClean(media, ai, modelName);
   } catch (err) {
@@ -409,16 +458,22 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
     return true;
   }
 
+  let analysis, creative, brainstorm, actions;
   try {
-    if (choice === '4') {
-      [analysis, brainstorm] = await Promise.all([
+    if (choice === '6') {
+      [analysis, creative, brainstorm] = await Promise.all([
         analyzeIdeas(transcription, ai, modelName),
+        creativePartner(transcription, ai, modelName),
         brainstormIdeas(transcription, ai, modelName),
       ]);
     } else if (choice === '2') {
       analysis = await analyzeIdeas(transcription, ai, modelName);
     } else if (choice === '3') {
+      creative = await creativePartner(transcription, ai, modelName);
+    } else if (choice === '4') {
       brainstorm = await brainstormIdeas(transcription, ai, modelName);
+    } else if (choice === '5') {
+      actions = await actionsOnly(transcription, ai, modelName);
     }
   } catch (err) {
     await waClient.sendMessage(msg.from, `❌ שגיאה בניתוח: ${err.message}`);
@@ -426,11 +481,13 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
   }
 
   const parts = [`📝 *תמלול:*\n${transcription}`];
-  if (analysis)   parts.push(`\n🧠 *ניתוח:*\n${analysis}`);
-  if (brainstorm) parts.push(`\n💡 *כיווני חשיבה:*\n${brainstorm}`);
+  if (analysis)   parts.push(`\n🧠 *ניתוח מעשי:*\n${analysis}`);
+  if (creative)   parts.push(`\n✍️ *שותף יצירתי:*\n${creative}`);
+  if (brainstorm) parts.push(`\n💡 *הרחבת חשיבה:*\n${brainstorm}`);
+  if (actions)    parts.push(`\n🎯 *משימות:*\n${actions}`);
   await waClient.sendMessage(msg.from, parts.join('\n'));
 
-  pendingVoiceResults.set(msg.from, { transcription, analysis, brainstorm });
+  pendingVoiceResults.set(msg.from, { transcription, analysis, creative, brainstorm, actions });
   await waClient.sendMessage(msg.from, MENU2_TEXT);
   return true;
 }
