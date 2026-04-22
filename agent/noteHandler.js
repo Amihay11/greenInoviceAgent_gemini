@@ -333,6 +333,9 @@ Your response should feel like creative dialogue, not analysis.
 
 Format exactly like this (keep Hebrew labels):
 
+*מצב רוח ואווירה:*
+[2-4 words that name the emotional tone and environment — e.g. "געגוע, בין לילה לבוקר" or "שמחה עצורה, אור של סוף יום". Be precise and poetic, not generic.]
+
 *הד:*
 [Reflect the core image back in fresh language — one sentence or phrase that amplifies without explaining. Stay in the same emotional register.]
 
