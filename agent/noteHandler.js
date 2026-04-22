@@ -263,13 +263,22 @@ async function chatWithNotes(question, msg, ai, modelName, waClient) {
 
 // ── voice note pipeline ───────────────────────────────────────────────────────
 
-async function sendListOrText(waClient, chatId, listObj, fallbackText, List) {
-  try {
-    await waClient.sendMessage(chatId, new List(...listObj));
-  } catch (_) {
-    await waClient.sendMessage(chatId, fallbackText);
-  }
-}
+const MENU1_TEXT = `🎙️ קיבלתי הודעה קולית — מה לעשות?
+
+1️⃣ המרה לטקסט בלבד
+2️⃣ ניתוח ועיקרי רעיונות
+3️⃣ כיווני חשיבה נוספים
+4️⃣ הכל (טקסט + ניתוח + חשיבה)
+
+שלח מספר 1-4`;
+
+const MENU2_TEXT = `💾 שמור ל-Notion?
+
+1️⃣ שמור ניתוח מלא
+2️⃣ שמור תמלול בלבד
+3️⃣ לא לשמור
+
+שלח מספר 1-3`;
 
 async function transcribeAndClean(media, ai, modelName) {
   const raw = await ai.models.generateContent({
@@ -304,55 +313,39 @@ async function brainstormIdeas(text, ai, modelName) {
   );
 }
 
-export async function handleVoiceNote(msg, ai, modelName, waClient, List) {
+export async function handleVoiceNote(msg, ai, modelName, waClient) {
   pendingVoiceMessages.set(msg.from, msg);
-  await sendListOrText(waClient, msg.from,
-    [
-      '🎙️ קיבלתי הודעה קולית — מה לעשות?',
-      'בחר פעולה',
-      [{
-        title: 'אפשרויות עיבוד',
-        rows: [
-          { id: 'voice_text',       title: '📝 המרה לטקסט בלבד',          description: 'תמלול נקי ללא ניתוח' },
-          { id: 'voice_analyze',    title: '🧠 ניתוח ועיקרי רעיונות',      description: 'חילוץ נקודות מרכזיות' },
-          { id: 'voice_brainstorm', title: '💡 כיווני חשיבה נוספים',        description: 'הרחבת הרעיון בשאלות סוקרטיות' },
-          { id: 'voice_full',       title: '🚀 הכל — טקסט + ניתוח + חשיבה', description: 'עיבוד מלא' },
-        ]
-      }],
-      '🎙️ הודעה קולית',
-      ''
-    ],
-    '🎙️ קיבלתי הודעה קולית. מה לעשות?\n1. המרה לטקסט\n2. ניתוח רעיונות\n3. כיווני חשיבה\n4. הכל\n\nשלח מספר 1-4',
-    List
-  );
+  await waClient.sendMessage(msg.from, MENU1_TEXT);
 }
 
-export async function handleVoiceListResponse(msg, ai, modelName, waClient, List) {
-  const id = msg.selectedRowId || msg.body;
+// Returns true if message was handled as a pending voice reply
+export async function handleVoiceReply(msg, ai, modelName, waClient) {
+  const choice = msg.body.trim();
 
-  // ── Menu 2 response (save/skip after analysis) ────────────────────────────
+  // ── Menu 2 response ────────────────────────────────────────────────────────
   if (pendingVoiceResults.has(msg.from)) {
     const { transcription, analysis, brainstorm } = pendingVoiceResults.get(msg.from);
     pendingVoiceResults.delete(msg.from);
 
-    if (id === 'save_transcript') {
+    if (choice === '2') {
       await saveNote(transcription, msg, ai, modelName, waClient);
-    } else if (id === 'skip') {
+    } else if (choice === '3') {
       await waClient.sendMessage(msg.from, '👍 בסדר, לא נשמר.');
     } else {
-      // save_full or any other selection → save everything
       const fullContent = [
         transcription,
-        analysis   ? `\n\n--- ניתוח ---\n${analysis}`       : '',
+        analysis   ? `\n\n--- ניתוח ---\n${analysis}`         : '',
         brainstorm ? `\n\n--- כיווני חשיבה ---\n${brainstorm}` : '',
       ].join('');
       await saveNote(fullContent, msg, ai, modelName, waClient);
     }
-    return;
+    return true;
   }
 
-  // ── Menu 1 response (choose processing type) ──────────────────────────────
-  if (!pendingVoiceMessages.has(msg.from)) return;
+  // ── Menu 1 response ────────────────────────────────────────────────────────
+  if (!pendingVoiceMessages.has(msg.from)) return false;
+  if (!['1','2','3','4'].includes(choice)) return false;
+
   const voiceMsg = pendingVoiceMessages.get(msg.from);
   pendingVoiceMessages.delete(msg.from);
 
@@ -364,7 +357,7 @@ export async function handleVoiceListResponse(msg, ai, modelName, waClient, List
     if (!media) throw new Error('Could not download audio');
   } catch (err) {
     await waClient.sendMessage(msg.from, `❌ שגיאה בהורדת ההודעה הקולית: ${err.message}`);
-    return;
+    return true;
   }
 
   let transcription, analysis, brainstorm;
@@ -372,59 +365,40 @@ export async function handleVoiceListResponse(msg, ai, modelName, waClient, List
     transcription = await transcribeAndClean(media, ai, modelName);
   } catch (err) {
     await waClient.sendMessage(msg.from, `❌ שגיאה בתמלול: ${err.message}`);
-    return;
+    return true;
   }
 
-  if (id === 'voice_text') {
+  if (choice === '1') {
     await waClient.sendMessage(msg.from, `📝 *תמלול:*\n${transcription}`);
-    await waClient.sendMessage(msg.from, `לשמירה ב-Notion שלח:\n_note ${transcription.slice(0, 100)}..._`);
-    return;
+    await waClient.sendMessage(msg.from, `לשמירה ב-Notion שלח:\n_note [הטקסט]_`);
+    return true;
   }
 
-  // Run chosen agents
   try {
-    if (id === 'voice_full') {
+    if (choice === '4') {
       [analysis, brainstorm] = await Promise.all([
         analyzeIdeas(transcription, ai, modelName),
         brainstormIdeas(transcription, ai, modelName),
       ]);
-    } else if (id === 'voice_analyze') {
+    } else if (choice === '2') {
       analysis = await analyzeIdeas(transcription, ai, modelName);
-    } else if (id === 'voice_brainstorm') {
+    } else if (choice === '3') {
       brainstorm = await brainstormIdeas(transcription, ai, modelName);
     }
   } catch (err) {
     await waClient.sendMessage(msg.from, `❌ שגיאה בניתוח: ${err.message}`);
-    return;
+    return true;
   }
 
-  // Build and send results
   const parts = [`📝 *תמלול:*\n${transcription}`];
   if (analysis)   parts.push(`\n🧠 *ניתוח:*\n${analysis}`);
   if (brainstorm) parts.push(`\n💡 *כיווני חשיבה:*\n${brainstorm}`);
   await waClient.sendMessage(msg.from, parts.join('\n'));
 
-  // Store results and show Menu 2
   pendingVoiceResults.set(msg.from, { transcription, analysis, brainstorm });
-  await sendListOrText(waClient, msg.from,
-    [
-      'מה תרצה לעשות עם הניתוח?',
-      'בחר פעולה',
-      [
-        {
-          title: 'שמירה ל-Notion',
-          rows: [
-            { id: 'save_full',       title: '💾 שמור ניתוח מלא',    description: 'תמלול + עיקרים + כיווני חשיבה' },
-            { id: 'save_transcript', title: '📝 שמור תמלול בלבד',   description: 'רק הטקסט הנקי' },
-          ]
-        },
-        {
-          title: 'ביטול',
-          rows: [{ id: 'skip', title: '❌ לא לשמור', description: '' }]
-        }
-      ],
-      '📋 שמירה ל-Notion?',
-      ''
+  await waClient.sendMessage(msg.from, MENU2_TEXT);
+  return true;
+}
     ],
     '💾 לשמירה ל-Notion שלח:\n_save_ — ניתוח מלא\n_transcript_ — תמלול בלבד\n_skip_ — לא לשמור',
     List
