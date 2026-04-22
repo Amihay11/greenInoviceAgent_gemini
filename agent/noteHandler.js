@@ -522,18 +522,51 @@ export async function scheduleReminder(text, msg, ai, modelName, waClient) {
     return;
   }
 
+  const reminder = { time, text: reminderText, to: msg.from };
   const reminders = existsSync(REMINDERS_FILE)
     ? JSON.parse(readFileSync(REMINDERS_FILE))
     : [];
-  reminders.push({ time, text: reminderText, to: msg.from });
+  reminders.push(reminder);
   writeFileSync(REMINDERS_FILE, JSON.stringify(reminders, null, 2));
+
+  armTimeout(reminder, waClient);
 
   const dateStr = new Date(iso).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
   await waClient.sendMessage(msg.from, `⏰ תזכורת נקבעה ל: *${dateStr}*\n${reminderText}`);
 }
 
-// ── reminder checker (called by setInterval in index.js) ─────────────────────
+// ── reminder engine ───────────────────────────────────────────────────────────
 
+function removeReminderFromFile(reminder) {
+  try {
+    if (!existsSync(REMINDERS_FILE)) return;
+    const all = JSON.parse(readFileSync(REMINDERS_FILE));
+    const remaining = all.filter(r => r.time !== reminder.time || r.to !== reminder.to);
+    writeFileSync(REMINDERS_FILE, JSON.stringify(remaining, null, 2));
+  } catch (_) {}
+}
+
+function armTimeout(reminder, waClient) {
+  const delay = Math.max(0, reminder.time - Date.now());
+  setTimeout(() => {
+    waClient.sendMessage(reminder.to, `⏰ תזכורת: ${reminder.text}`).catch(console.error);
+    removeReminderFromFile(reminder);
+  }, delay);
+}
+
+// Re-arm all pending reminders on startup / WhatsApp reconnect
+export function armAllReminders(waClient) {
+  if (!existsSync(REMINDERS_FILE)) return;
+  try {
+    const all = JSON.parse(readFileSync(REMINDERS_FILE));
+    for (const r of all) armTimeout(r, waClient);
+    if (all.length) console.log(`Armed ${all.length} pending reminder(s)`);
+  } catch (err) {
+    console.error('Error arming reminders:', err.message);
+  }
+}
+
+// Polling fallback (catches any timeout that was missed due to crash/restart)
 export function checkReminders(waClient) {
   if (!existsSync(REMINDERS_FILE)) return;
   try {

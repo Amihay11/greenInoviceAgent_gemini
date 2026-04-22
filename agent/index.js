@@ -11,7 +11,7 @@ import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 import {
-  handleNoteCommand, checkReminders, handleVoiceNote, handleVoiceReply,
+  handleNoteCommand, checkReminders, armAllReminders, handleVoiceNote, handleVoiceReply,
   saveNote, searchNotes, getDailySummary, getWeeklySummary, chatWithNotes, scheduleReminder
 } from './noteHandler.js';
 
@@ -382,9 +382,10 @@ client.on('message', async msg => {
   await client.sendMessage(msg.from, menuText);
 });
 
-// Start reminder polling after WhatsApp is ready
+// Start reminders after WhatsApp is ready (also fires on reconnect)
 client.on('ready', () => {
-  setInterval(() => checkReminders(client), 60 * 1000);
+  armAllReminders(client);
+  setInterval(() => checkReminders(client), 30 * 1000);
 
   if (process.env.WHATSAPP_PHONE) {
     const me = `${process.env.WHATSAPP_PHONE}@c.us`;
