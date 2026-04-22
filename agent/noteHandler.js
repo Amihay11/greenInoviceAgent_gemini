@@ -303,13 +303,48 @@ async function transcribeAndClean(media, ai, modelName) {
 
 async function analyzeIdeas(text, ai, modelName) {
   return geminiText(ai, modelName,
-    `You are an idea extraction specialist. Analyze the following spoken notes and extract the key content. Respond in the SAME language as the input.\n\nFormat your response exactly like this:\n\n*עיקרי הרעיונות:*\n• [main idea 1]\n• [main idea 2]\n• ...\n\n*נושאים מרכזיים:*\n[2-3 themes in one line]\n\n*פעולות נדרשות:*\n• [action items, or "לא צוינו"]\n\nExtract only what is explicitly stated. Do not invent. Be concise.\n\nText:\n${text}`
+    `You are a practical note organizer. Read these spoken notes and extract what matters. Respond in the SAME language as the input.
+
+Format exactly like this (keep Hebrew labels):
+
+*משימות ופעולות:*
+• [concrete task or action — if none write "לא צוינו"]
+
+*רעיונות לשמור:*
+• [idea worth keeping — omit this section entirely if there are no conceptual ideas]
+
+*דחיפות:*
+[What seems most urgent or time-sensitive in one line, or "לא צוין"]
+
+Rules: extract only what is explicitly stated. Be short and concrete. Do NOT add themes, interpretations, or categories.
+
+Notes:
+${text}`
   );
 }
 
 async function brainstormIdeas(text, ai, modelName) {
   return geminiText(ai, modelName,
-    `You are a Socratic thinking partner — your job is to expand thinking, not resolve it. Respond in the SAME language as the input.\n\nFormat your response exactly like this:\n\n*כיווני חשיבה נוספים:*\n• [non-obvious direction 1 — surprising, not cliché]\n• [non-obvious direction 2]\n• [non-obvious direction 3]\n\n*הנחה שכדאי לבחון:*\n[One hidden assumption embedded in the thinking, phrased as a question]\n\n*שאלה לחשוב עליה:*\n[One Socratic question that deepens or challenges the core idea — do NOT answer it]\n\nBe concise, non-obvious, and intellectually stimulating.\n\nText:\n${text}`
+    `You are a helpful thinking partner. Read these notes and offer practical perspectives. Respond in the SAME language as the input.
+
+Format exactly like this (keep Hebrew labels):
+
+*זוויות נוספות:*
+• [practical angle, missing step, or useful connection — grounded in the actual content]
+• [another practical angle]
+• [third angle only if clearly useful]
+
+*שאלה לבירור:*
+[One short, practical question that helps clarify or move the tasks forward]
+
+Rules:
+- Stay grounded in what was actually said. Do NOT philosophize mundane tasks.
+- For task lists: note what might be missing, conflicts, or better ordering.
+- For ideas: suggest related implications or next steps.
+- Be concise and concrete.
+
+Notes:
+${text}`
   );
 }
 
