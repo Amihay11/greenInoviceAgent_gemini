@@ -399,11 +399,6 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
   await waClient.sendMessage(msg.from, MENU2_TEXT);
   return true;
 }
-    ],
-    '💾 לשמירה ל-Notion שלח:\n_save_ — ניתוח מלא\n_transcript_ — תמלול בלבד\n_skip_ — לא לשמור',
-    List
-  );
-}
 
 // ── reminders ────────────────────────────────────────────────────────────────
 
