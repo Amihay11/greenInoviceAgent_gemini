@@ -12,7 +12,6 @@ import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 import {
   handleNoteCommand, checkReminders, armAllReminders, handleVoiceNote, handleVoiceReply,
-  saveNote, searchNotes, getDailySummary, getWeeklySummary, chatWithNotes, scheduleReminder
 } from './noteHandler.js';
 import {
   buildSystemPrompt,
@@ -20,7 +19,6 @@ import {
   EMAIL_GREETING_HE,
   READY_MESSAGE,
   PROCESSING_MESSAGES,
-  INTENT_LABELS,
   HELP_TEXT,
 } from './personality/shaul.js';
 
@@ -130,49 +128,7 @@ client.on('ready', () => {
 // Chat history per contact
 const chatHistories = new Map();
 
-// ── Intent classification ──────────────────────────────────────────────────────
-
-const INTENT_LABEL = INTENT_LABELS;
-
-async function classifyIntent(text, ai, modelName) {
-  const res = await ai.models.generateContent({
-    model: modelName,
-    contents: [{ parts: [{ text: `Classify this WhatsApp message into exactly one category. Reply with ONLY the category name, nothing else.
-
-Categories:
-- invoice: GreenInvoice tasks — creating invoices, receipts, tax documents, listing clients or documents
-- note_remind: setting a reminder for a specific future time
-- note_search: searching through saved notes or ideas
-- note_summary_day: summarizing today's saved notes
-- note_summary_week: summarizing this week's saved notes
-- note_chat: asking a question about or discussing saved notes
-- note_save: saving a new idea, thought, or memo
-- general: any other question, request, or conversation
-
-Message: "${text.slice(0, 400)}"` }] }]
-  });
-  const clean = ((res.text || '').trim().toLowerCase()).replace(/[^a-z_]/g, '');
-  return INTENT_LABEL[clean] ? clean : 'general';
-}
-
-async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClient) {
-  const needsNotion = ['note_save', 'note_search', 'note_summary_day', 'note_summary_week', 'note_chat'];
-  if (needsNotion.includes(intent) && (!process.env.NOTION_API_KEY || !process.env.NOTION_NOTES_DB_ID)) {
-    await waClient.sendMessage(originalMsg.from, '⚠️ Notion לא מוגדר — הוסף NOTION_API_KEY ו-NOTION_NOTES_DB_ID ל-.env');
-    return;
-  }
-  switch (intent) {
-    case 'invoice':           await handleMorningCommand(originalMsg); break;
-    case 'note_save':         await saveNote(msgText, originalMsg, ai, modelName, waClient); break;
-    case 'note_search':       await searchNotes(msgText, originalMsg, ai, modelName, waClient); break;
-    case 'note_summary_day':  await getDailySummary(originalMsg, ai, modelName, waClient); break;
-    case 'note_summary_week': await getWeeklySummary(originalMsg, ai, modelName, waClient); break;
-    case 'note_chat':         await chatWithNotes(msgText, originalMsg, ai, modelName, waClient); break;
-    case 'note_remind':       await scheduleReminder(msgText, originalMsg, ai, modelName, waClient); break;
-    default:                  await handleGcCommand(originalMsg);
-  }
-}
-
+// Shaul's main chat — conversation first, tools only on explicit orders.
 async function handleMorningCommand(msg) {
   const contact = await msg.getContact();
   const contactName = contact.pushname || contact.number || "User";
@@ -187,14 +143,20 @@ async function handleMorningCommand(msg) {
   try {
     console.log(`Sending WhatsApp message to Gemini...`);
 
-    await client.sendMessage(msg.from, PROCESSING_MESSAGES.invoice);
+    // Show a typing indicator instead of a placeholder text message — less
+    // intrusive for a conversational agent. Best-effort; not all WhatsApp
+    // states support it, so we swallow errors.
+    try {
+      const chatObj = await msg.getChat();
+      await chatObj.sendStateTyping();
+    } catch (_) { /* typing state is cosmetic */ }
 
     const chat = ai.chats.create({
       model: modelName,
       history: history,
       config: {
         tools: [{ functionDeclarations: mcpTools }],
-        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'invoice' })
+        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'mentor' })
       }
     });
 
@@ -330,10 +292,15 @@ client.on('message', async msg => {
     return;
   }
 
-  // Classify intent and act. Shaul doesn't ask — he moves.
-  let intent = 'general';
-  try { intent = await classifyIntent(msgText, ai, modelName); } catch (_) {}
-  await executeIntent(intent, msgText, msg, ai, modelName, client);
+  // Explicit note commands (save/search/summary/remind/chat via `note ...` prefix)
+  // are the one path that bypasses Shaul's chat — they're direct orders.
+  if (/^note(\s|$)/i.test(msgText)) {
+    await handleNoteCommand(msg, ai, modelName, client);
+    return;
+  }
+
+  // Everything else → Shaul. He talks. He only uses tools when you order him to.
+  await handleMorningCommand(msg);
 });
 
 // Start reminders after WhatsApp is ready (also fires on reconnect)
@@ -462,7 +429,7 @@ async function processEmailMessage(sender, subject, text) {
       history: history,
       config: {
         tools: [{ functionDeclarations: mcpTools }],
-        systemInstruction: buildSystemPrompt({ channel: 'email', task: 'invoice' })
+        systemInstruction: buildSystemPrompt({ channel: 'email', task: 'mentor' })
       }
     });
 
