@@ -41,7 +41,7 @@ if (!process.env.MCP_SERVER_PATH) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+const modelName = process.env.GEMINI_MODEL || 'gemini-3-pro';
 console.log(`Shaul is running on model: ${modelName}`);
 
 // --- MCP Setup ---
