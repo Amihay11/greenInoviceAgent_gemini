@@ -14,6 +14,17 @@ import {
   handleNoteCommand, checkReminders, armAllReminders, handleVoiceNote, handleVoiceReply,
   saveNote, searchNotes, getDailySummary, getWeeklySummary, chatWithNotes, scheduleReminder
 } from './noteHandler.js';
+import {
+  buildSystemPrompt,
+  GREETING_HE,
+  EMAIL_GREETING_HE,
+  READY_MESSAGE,
+  CANCEL_MESSAGE,
+  CONFIRM_MENU_HEADER,
+  PROCESSING_MESSAGES,
+  INTENT_LABELS,
+  HELP_TEXT,
+} from './personality/shaul.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,7 +41,8 @@ if (!process.env.MCP_SERVER_PATH) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const modelName = 'gemini-2.5-flash';
+const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+console.log(`Shaul is running on model: ${modelName}`);
 
 // --- MCP Setup ---
 let mcpClient;
@@ -124,16 +136,7 @@ const chatHistories = new Map();
 
 const pendingIntentConfirm = new Map(); // chatId → { options, originalMsg, msgText }
 
-const INTENT_LABEL = {
-  invoice:           '📊 GreenInvoice — חשבוניות ולקוחות',
-  note_save:         '📝 שמור כהערה ב-Notion',
-  note_search:       '🔍 חפש ברשימות שמורות',
-  note_summary_day:  '📋 סיכום הרשימות של היום',
-  note_summary_week: '📋 סיכום הרשימות של השבוע',
-  note_chat:         '💬 שוחח על הרשימות שלך',
-  note_remind:       '⏰ קביעת תזכורת',
-  general:           '🤖 שאל AI',
-};
+const INTENT_LABEL = INTENT_LABELS;
 
 async function classifyIntent(text, ai, modelName) {
   const res = await ai.models.generateContent({
@@ -172,7 +175,7 @@ function buildConfirmMenu(intent) {
 
   return {
     options: opts,
-    menuText: `🤖 הבנתי — מה לעשות?\n\n${lines.join('\n')}\n\nשלח מספר 1–${opts.length}`,
+    menuText: `${CONFIRM_MENU_HEADER}\n\n${lines.join('\n')}\n\nשלח מספר 1–${opts.length}`,
   };
 }
 
@@ -207,7 +210,7 @@ async function handleIntentConfirm(msg, ai, modelName, waClient) {
 
   const intent = options[parseInt(choice, 10) - 1];
   if (!intent || intent === 'cancel') {
-    await waClient.sendMessage(msg.from, '👍 ביטול.');
+    await waClient.sendMessage(msg.from, CANCEL_MESSAGE);
     return true;
   }
   await executeIntent(intent, msgText, originalMsg, ai, modelName, waClient);
@@ -219,22 +222,23 @@ async function handleMorningCommand(msg) {
   const contactName = contact.pushname || contact.number || "User";
   console.log(`Received Morning Command message from ${contactName}: ${msg.body}`);
 
+  const greet = GREETING_HE(contactName);
   const history = chatHistories.get(msg.from) || [
-    { role: "user", parts: [{ text: `Hello, I am ${contactName}.` }] },
-    { role: "model", parts: [{ text: "Hello! I am your Morning (GreenInvoice) assistant. How can I help you today?" }] }
+    { role: "user", parts: [{ text: greet.userSeed }] },
+    { role: "model", parts: [{ text: greet.modelSeed }] }
   ];
 
   try {
     console.log(`Sending WhatsApp message to Gemini...`);
 
-    await client.sendMessage(msg.from, "⏳ מעבד את הבקשה... (Processing...)");
+    await client.sendMessage(msg.from, PROCESSING_MESSAGES.invoice);
 
     const chat = ai.chats.create({
       model: modelName,
       history: history,
       config: {
         tools: [{ functionDeclarations: mcpTools }],
-        systemInstruction: "You are an AI assistant integrated with WhatsApp and the Morning (GreenInvoice) Israeli invoicing system. IMPORTANT RULES:\n1. Always reply in the SAME LANGUAGE as the user. If they write in Hebrew, reply in Hebrew.\n2. When creating documents, use these standard GreenInvoice document types (type):\n   - 300: חשבון עסקה / דרישת תשלום (Transaction Account / Payment Request / Proforma)\n   - 320: קבלה (Receipt - use this if they are Osek Patur and ask for an invoice)\n   - 330: חשבונית מס קבלה (Tax Invoice Receipt)\n   - 305: חשבונית מס (Tax Invoice)\n3. Be concise and professional.\n4. When you need to call a tool, ALWAYS provide a short text acknowledgement (e.g. 'Working on it...') ALONG WITH the tool call, so the user gets an instant reply while you process."
+        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'invoice' })
       }
     });
 
@@ -302,11 +306,11 @@ async function handleGcCommand(msg) {
   const parts = [];
 
   if (msg.hasMedia && msg.type === 'image') {
-    await client.sendMessage(msg.from, "⏳ מנתח תמונה... (Analyzing image...)");
+    await client.sendMessage(msg.from, PROCESSING_MESSAGES.image);
     const media = await msg.downloadMedia();
     if (media) parts.push({ inlineData: { mimeType: media.mimetype, data: media.data } });
   } else {
-    await client.sendMessage(msg.from, "⏳ מעבד... (Processing...)");
+    await client.sendMessage(msg.from, PROCESSING_MESSAGES.generic);
   }
 
   const prompt = commandBody.length > 0 ? commandBody
@@ -324,7 +328,7 @@ async function handleGcCommand(msg) {
       model: modelName,
       contents: [{ parts }],
       config: {
-        systemInstruction: "You are a helpful AI assistant. Reply in the same language as the user. Be concise."
+        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'general' })
       }
     });
     await client.sendMessage(msg.from, result.text || "No response generated.");
@@ -389,34 +393,12 @@ client.on('ready', () => {
 
   if (process.env.WHATSAPP_PHONE) {
     const me = `${process.env.WHATSAPP_PHONE}@c.us`;
-    client.sendMessage(me, '✅ הסוכן מוכן לפקודות').catch(console.error);
+    client.sendMessage(me, READY_MESSAGE).catch(console.error);
   }
 });
 
 async function handleHelpCommand(msg) {
-  const text = `🤖 *הסוכן החכם שלך*
-פשוט כתוב מה שאתה רוצה — הסוכן יבין ויציע תפריט.
-
-🎙️ *הודעה קולית* — שלח ותקבל תפריט:
-  תמלול • ניתוח • כיווני חשיבה • הכל
-
-📊 *GreenInvoice* — לדוגמה:
-  "צור חשבונית מס קבלה על 500 לישראל ישראלי"
-  "רשימת לקוחות"
-
-📋 *Notion* — לדוגמה:
-  "שמור רעיון על..."
-  "חפש רשימות בנושא..."
-  "תן לי סיכום של היום"
-  "קבע תזכורת למחר ב-9 ל..."
-
-🤖 *AI כללי* — כל שאלה חופשית
-  + תמונה — OCR / ניתוח תמונה
-
-📱 *קישור WhatsApp* — שלח מספר טלפון בלבד
-
-*עזרה / help* — הצג הודעה זו`;
-  await client.sendMessage(msg.from, text);
+  await client.sendMessage(msg.from, HELP_TEXT);
 }
 
 // --- Email Setup ---
@@ -517,9 +499,10 @@ async function checkUnreadEmails(imapClient) {
 
 // Function to handle Gemini logic for Emails
 async function processEmailMessage(sender, subject, text) {
+  const greet = EMAIL_GREETING_HE(sender);
   const history = emailHistories.get(sender) || [
-    { role: "user", parts: [{ text: `Hello, I am contacting you via email. My address is ${sender}.` }] },
-    { role: "model", parts: [{ text: "Hello! I am your Morning (GreenInvoice) assistant. How can I help you today?" }] }
+    { role: "user", parts: [{ text: greet.userSeed }] },
+    { role: "model", parts: [{ text: greet.modelSeed }] }
   ];
 
   try {
@@ -529,7 +512,7 @@ async function processEmailMessage(sender, subject, text) {
       history: history,
       config: {
         tools: [{ functionDeclarations: mcpTools }],
-        systemInstruction: "You are an AI assistant integrated with Email and the Morning (GreenInvoice) Israeli invoicing system. IMPORTANT RULES:\n1. Always reply in the SAME LANGUAGE as the user. If they write in Hebrew, reply in Hebrew.\n2. When creating documents, use these standard GreenInvoice document types (type):\n   - 300: חשבון עסקה / דרישת תשלום (Transaction Account / Payment Request / Proforma)\n   - 320: קבלה (Receipt - use this if they are Osek Patur and ask for an invoice)\n   - 330: חשבונית מס קבלה (Tax Invoice Receipt)\n   - 305: חשבונית מס (Tax Invoice)\n3. Be concise and professional."
+        systemInstruction: buildSystemPrompt({ channel: 'email', task: 'invoice' })
       }
     });
 

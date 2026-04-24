@@ -2,6 +2,13 @@ import { Client as NotionClient } from '@notionhq/client';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import {
+  personaPrefix,
+  PROCESSING_MESSAGES,
+  VOICE_MENU1_TEXT,
+  VOICE_MENU2_TEXT,
+  VOICE_CANCEL_SAVE,
+} from './personality/shaul.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REMINDERS_FILE = join(__dirname, 'reminders.json');
@@ -137,7 +144,7 @@ function pageToText(page, titleProp = 'Name') {
 // ── save note ─────────────────────────────────────────────────────────────────
 
 export async function saveNote(body, msg, ai, modelName, waClient) {
-  await waClient.sendMessage(msg.from, '💾 שומר רעיון...');
+  await waClient.sendMessage(msg.from, PROCESSING_MESSAGES.note_save);
 
   const { tags: userTags, clean } = extractHashtags(body);
 
@@ -184,7 +191,7 @@ export async function saveNote(body, msg, ai, modelName, waClient) {
 // ── search notes ──────────────────────────────────────────────────────────────
 
 export async function searchNotes(query, msg, ai, modelName, waClient) {
-  await waClient.sendMessage(msg.from, '🔍 מחפש ברעיונות שלך...');
+  await waClient.sendMessage(msg.from, PROCESSING_MESSAGES.note_search);
 
   const pages = await safeGetNotes(waClient, msg);
   if (!pages || pages.length === 0) {
@@ -195,7 +202,7 @@ export async function searchNotes(query, msg, ai, modelName, waClient) {
   const tp = await getTitleProp();
   const notesText = pages.map(p => pageToText(p, tp)).join('\n');
   const answer = await geminiText(ai, modelName,
-    `You are a personal knowledge assistant. The user's saved notes:\n\n${notesText}\n\nUser query: "${query}"\n\nAnswer in the same language as the query. Be concise and cite note titles when relevant.`
+    `${personaPrefix({ task: 'note_search' })}\n\n---\n\nThe user's saved notes:\n\n${notesText}\n\nUser query: "${query}"\n\nAnswer as Shaul. Same language as the query. Cite note titles when relevant.`
   );
   await waClient.sendMessage(msg.from, answer);
 }
@@ -203,12 +210,12 @@ export async function searchNotes(query, msg, ai, modelName, waClient) {
 // ── summaries ─────────────────────────────────────────────────────────────────
 
 export async function getDailySummary(msg, ai, modelName, waClient) {
-  await waClient.sendMessage(msg.from, '📋 מכין סיכום יומי...');
+  await waClient.sendMessage(msg.from, PROCESSING_MESSAGES.note_summary_day);
   await summariseByRange(msg, ai, modelName, waClient, 'today');
 }
 
 export async function getWeeklySummary(msg, ai, modelName, waClient) {
-  await waClient.sendMessage(msg.from, '📋 מכין סיכום שבועי...');
+  await waClient.sendMessage(msg.from, PROCESSING_MESSAGES.note_summary_week);
   await summariseByRange(msg, ai, modelName, waClient, 'week');
 }
 
@@ -238,7 +245,7 @@ async function summariseByRange(msg, ai, modelName, waClient, range) {
   const notesText = filtered.map(p => pageToText(p, tp)).join('\n');
   const label = range === 'today' ? 'היום' : 'השבוע האחרון';
   const summary = await geminiText(ai, modelName,
-    `סכם את הרעיונות הבאים שנשמרו ${label}. כתוב בעברית, בצורה ברורה ומאורגנת עם נקודות:\n\n${notesText}`
+    `${personaPrefix({ task: 'note_summary' })}\n\n---\n\nסכם את הרעיונות הבאים שנשמרו ${label}. כתוב כמו שאול — ברור, ממוקד, בלי מילוי.\n\n${notesText}`
   );
   await waClient.sendMessage(msg.from, summary);
 }
@@ -246,7 +253,7 @@ async function summariseByRange(msg, ai, modelName, waClient, range) {
 // ── chat with notes ───────────────────────────────────────────────────────────
 
 export async function chatWithNotes(question, msg, ai, modelName, waClient) {
-  await waClient.sendMessage(msg.from, '💬 חושב על הרעיונות שלך...');
+  await waClient.sendMessage(msg.from, PROCESSING_MESSAGES.note_chat);
 
   const pages = await safeGetNotes(waClient, msg);
   if (!pages) return;
@@ -256,31 +263,15 @@ export async function chatWithNotes(question, msg, ai, modelName, waClient) {
     : '(אין רעיונות שמורים עדיין)';
 
   const answer = await geminiText(ai, modelName,
-    `You are a personal knowledge assistant. Here are all the user's saved notes:\n\n${notesText}\n\nUser question: "${question}"\n\nAnswer thoughtfully in the same language as the question. Connect ideas, find patterns, and be insightful.`
+    `${personaPrefix({ task: 'note_chat' })}\n\n---\n\nAll of the user's saved notes:\n\n${notesText}\n\nUser question: "${question}"\n\nAnswer as Shaul. Same language as the question. Connect ideas, find patterns, push their thinking.`
   );
   await waClient.sendMessage(msg.from, answer);
 }
 
 // ── voice note pipeline ───────────────────────────────────────────────────────
 
-const MENU1_TEXT = `🎙️ קיבלתי הודעה קולית — מה לעשות?
-
-1️⃣ תמלול בלבד
-2️⃣ ניתוח מעשי — משימות ורעיונות
-3️⃣ שותף יצירתי — לתוכן שירי ומטפורי
-4️⃣ הרחבת חשיבה — זוויות ורעיונות
-5️⃣ משימות בלבד — רשימה נקייה
-6️⃣ הכל — ניתוח + יצירתי + הרחבה
-
-שלח מספר 1-6`;
-
-const MENU2_TEXT = `💾 שמור ל-Notion?
-
-1️⃣ שמור הכל
-2️⃣ שמור תמלול בלבד
-3️⃣ לא לשמור
-
-שלח מספר 1-3`;
+const MENU1_TEXT = VOICE_MENU1_TEXT;
+const MENU2_TEXT = VOICE_MENU2_TEXT;
 
 async function transcribeAndClean(media, ai, modelName) {
   const raw = await ai.models.generateContent({
@@ -415,7 +406,7 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
     if (choice === '2') {
       await saveNote(transcription, msg, ai, modelName, waClient);
     } else if (choice === '3') {
-      await waClient.sendMessage(msg.from, '👍 בסדר, לא נשמר.');
+      await waClient.sendMessage(msg.from, VOICE_CANCEL_SAVE);
     } else {
       const fullContent = [
         transcription,
@@ -436,7 +427,7 @@ export async function handleVoiceReply(msg, ai, modelName, waClient) {
   const voiceMsg = pendingVoiceMessages.get(msg.from);
   pendingVoiceMessages.delete(msg.from);
 
-  await waClient.sendMessage(msg.from, '⏳ מעבד את ההודעה הקולית...');
+  await waClient.sendMessage(msg.from, PROCESSING_MESSAGES.voice);
 
   let media;
   try {
