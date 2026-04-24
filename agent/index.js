@@ -19,8 +19,6 @@ import {
   GREETING_HE,
   EMAIL_GREETING_HE,
   READY_MESSAGE,
-  CANCEL_MESSAGE,
-  CONFIRM_MENU_HEADER,
   PROCESSING_MESSAGES,
   INTENT_LABELS,
   HELP_TEXT,
@@ -134,8 +132,6 @@ const chatHistories = new Map();
 
 // ── Intent classification ──────────────────────────────────────────────────────
 
-const pendingIntentConfirm = new Map(); // chatId → { options, originalMsg, msgText }
-
 const INTENT_LABEL = INTENT_LABELS;
 
 async function classifyIntent(text, ai, modelName) {
@@ -159,26 +155,6 @@ Message: "${text.slice(0, 400)}"` }] }]
   return INTENT_LABEL[clean] ? clean : 'general';
 }
 
-function buildConfirmMenu(intent) {
-  const primary = INTENT_LABEL[intent];
-  const alts = ['note_save', 'invoice', 'general']
-    .filter(k => k !== intent)
-    .map(k => ({ key: k, label: INTENT_LABEL[k] }))
-    .slice(0, 2);
-
-  const opts = [intent, ...alts.map(o => o.key), 'cancel'];
-  const lines = [
-    `1️⃣  ${primary}`,
-    ...alts.map((o, i) => `${i + 2}️⃣  ${o.label}`),
-    `${opts.length}️⃣  ❌ ביטול`,
-  ];
-
-  return {
-    options: opts,
-    menuText: `${CONFIRM_MENU_HEADER}\n\n${lines.join('\n')}\n\nשלח מספר 1–${opts.length}`,
-  };
-}
-
 async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClient) {
   const needsNotion = ['note_save', 'note_search', 'note_summary_day', 'note_summary_week', 'note_chat'];
   if (needsNotion.includes(intent) && (!process.env.NOTION_API_KEY || !process.env.NOTION_NOTES_DB_ID)) {
@@ -195,26 +171,6 @@ async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClie
     case 'note_remind':       await scheduleReminder(msgText, originalMsg, ai, modelName, waClient); break;
     default:                  await handleGcCommand(originalMsg);
   }
-}
-
-async function handleIntentConfirm(msg, ai, modelName, waClient) {
-  if (!pendingIntentConfirm.has(msg.from)) return false;
-  const choice = msg.body.trim();
-  if (!/^\d$/.test(choice)) {
-    pendingIntentConfirm.delete(msg.from);
-    return false; // treat as a new message
-  }
-
-  const { options, originalMsg, msgText } = pendingIntentConfirm.get(msg.from);
-  pendingIntentConfirm.delete(msg.from);
-
-  const intent = options[parseInt(choice, 10) - 1];
-  if (!intent || intent === 'cancel') {
-    await waClient.sendMessage(msg.from, CANCEL_MESSAGE);
-    return true;
-  }
-  await executeIntent(intent, msgText, originalMsg, ai, modelName, waClient);
-  return true;
 }
 
 async function handleMorningCommand(msg) {
@@ -350,9 +306,6 @@ client.on('message', async msg => {
   // Pending voice menu replies (Menu 1 and Menu 2)
   if (await handleVoiceReply(msg, ai, modelName, client)) return;
 
-  // Pending intent confirmation menu
-  if (await handleIntentConfirm(msg, ai, modelName, client)) return;
-
   const msgText = msg.body.trim();
   const lower = msgText.toLowerCase();
 
@@ -377,13 +330,10 @@ client.on('message', async msg => {
     return;
   }
 
-  // Classify intent → show confirmation menu
+  // Classify intent and act. Shaul doesn't ask — he moves.
   let intent = 'general';
   try { intent = await classifyIntent(msgText, ai, modelName); } catch (_) {}
-
-  const { options, menuText } = buildConfirmMenu(intent);
-  pendingIntentConfirm.set(msg.from, { options, originalMsg: msg, msgText });
-  await client.sendMessage(msg.from, menuText);
+  await executeIntent(intent, msgText, msg, ai, modelName, client);
 });
 
 // Start reminders after WhatsApp is ready (also fires on reconnect)
