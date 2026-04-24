@@ -10,6 +10,10 @@ import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
+import {
+  handleNoteCommand, checkReminders, armAllReminders, handleVoiceNote, handleVoiceReply,
+  saveNote, searchNotes, getDailySummary, getWeeklySummary, chatWithNotes, scheduleReminder
+} from './noteHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,6 +22,10 @@ dotenv.config({ path: join(__dirname, '.env') });
 // Ensure Gemini API Key is set
 if (!process.env.GEMINI_API_KEY) {
   console.error("Error: GEMINI_API_KEY environment variable is not set. Please set it in a .env file.");
+  process.exit(1);
+}
+if (!process.env.MCP_SERVER_PATH) {
+  console.error("Error: MCP_SERVER_PATH environment variable is not set. Please set it in a .env file.");
   process.exit(1);
 }
 
@@ -31,8 +39,8 @@ let mcpTools = [];
 async function setupMCP() {
   console.log("Starting GreenInvoice MCP Server...");
   const transport = new StdioClientTransport({
-    command: "c:\\Users\\User\\Documents\\morningMCP\\node\\node-v20.12.2-win-x64\\node.exe",
-    args: ["c:\\Users\\User\\Documents\\morningMCP\\GreenInvoice-MCP-main\\dist\\index.js"],
+    command: process.env.NODE_EXECUTABLE || 'node',
+    args: [process.env.MCP_SERVER_PATH],
     env: {
       ...process.env,
       GREENINVOICE_API_ID: process.env.GREENINVOICE_API_ID,
@@ -71,17 +79,38 @@ async function setupMCP() {
 }
 
 // --- WhatsApp Setup ---
+const puppeteerConfig = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+if (process.env.CHROME_EXECUTABLE_PATH) {
+  puppeteerConfig.executablePath = process.env.CHROME_EXECUTABLE_PATH;
+}
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: join(__dirname, 'whatsapp-auth') }),
-  puppeteer: {
-    executablePath: "c:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", // Fallback if needed, usually omitted to use bundled
-    args: ['--no-sandbox']
-  }
+  puppeteer: puppeteerConfig
 });
 
-client.on('qr', (qr) => {
-  console.log('Scan the QR code below to authenticate with WhatsApp:');
-  qrcode.generate(qr, { small: true });
+let pairingCodeRequested = false;
+client.on('qr', async (qr) => {
+  if (process.env.WHATSAPP_PHONE) {
+    if (pairingCodeRequested) return;
+    pairingCodeRequested = true;
+    try {
+      // Wait for WhatsApp's internal API to be ready before requesting
+      await new Promise(r => setTimeout(r, 3000));
+      const code = await client.requestPairingCode(process.env.WHATSAPP_PHONE);
+      console.log('\n==========================================');
+      console.log(`  Pairing code: ${code}`);
+      console.log('==========================================');
+      console.log('WhatsApp → Linked Devices → Link with phone number\n');
+    } catch (err) {
+      console.error('Pairing code error:', err.message || err);
+      console.log('Falling back to QR:');
+      qrcode.generate(qr, { small: true });
+    }
+  } else {
+    console.log('Scan the QR code below to authenticate with WhatsApp:');
+    qrcode.generate(qr, { small: true });
+  }
 });
 
 client.on('ready', () => {
@@ -91,14 +120,101 @@ client.on('ready', () => {
 // Chat history per contact
 const chatHistories = new Map();
 
-client.on('message', async msg => {
-  if (msg.from === 'status@broadcast') return;
+// ── Intent classification ──────────────────────────────────────────────────────
 
-  const msgText = msg.body.trim().toLowerCase();
-  if (!msgText.startsWith('morning command') && !msgText.startsWith('mc')) {
-    return; // Ignore messages not meant for this agent
+const pendingIntentConfirm = new Map(); // chatId → { options, originalMsg, msgText }
+
+const INTENT_LABEL = {
+  invoice:           '📊 GreenInvoice — חשבוניות ולקוחות',
+  note_save:         '📝 שמור כהערה ב-Notion',
+  note_search:       '🔍 חפש ברשימות שמורות',
+  note_summary_day:  '📋 סיכום הרשימות של היום',
+  note_summary_week: '📋 סיכום הרשימות של השבוע',
+  note_chat:         '💬 שוחח על הרשימות שלך',
+  note_remind:       '⏰ קביעת תזכורת',
+  general:           '🤖 שאל AI',
+};
+
+async function classifyIntent(text, ai, modelName) {
+  const res = await ai.models.generateContent({
+    model: modelName,
+    contents: [{ parts: [{ text: `Classify this WhatsApp message into exactly one category. Reply with ONLY the category name, nothing else.
+
+Categories:
+- invoice: GreenInvoice tasks — creating invoices, receipts, tax documents, listing clients or documents
+- note_remind: setting a reminder for a specific future time
+- note_search: searching through saved notes or ideas
+- note_summary_day: summarizing today's saved notes
+- note_summary_week: summarizing this week's saved notes
+- note_chat: asking a question about or discussing saved notes
+- note_save: saving a new idea, thought, or memo
+- general: any other question, request, or conversation
+
+Message: "${text.slice(0, 400)}"` }] }]
+  });
+  const clean = ((res.text || '').trim().toLowerCase()).replace(/[^a-z_]/g, '');
+  return INTENT_LABEL[clean] ? clean : 'general';
+}
+
+function buildConfirmMenu(intent) {
+  const primary = INTENT_LABEL[intent];
+  const alts = ['note_save', 'invoice', 'general']
+    .filter(k => k !== intent)
+    .map(k => ({ key: k, label: INTENT_LABEL[k] }))
+    .slice(0, 2);
+
+  const opts = [intent, ...alts.map(o => o.key), 'cancel'];
+  const lines = [
+    `1️⃣  ${primary}`,
+    ...alts.map((o, i) => `${i + 2}️⃣  ${o.label}`),
+    `${opts.length}️⃣  ❌ ביטול`,
+  ];
+
+  return {
+    options: opts,
+    menuText: `🤖 הבנתי — מה לעשות?\n\n${lines.join('\n')}\n\nשלח מספר 1–${opts.length}`,
+  };
+}
+
+async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClient) {
+  const needsNotion = ['note_save', 'note_search', 'note_summary_day', 'note_summary_week', 'note_chat'];
+  if (needsNotion.includes(intent) && (!process.env.NOTION_API_KEY || !process.env.NOTION_NOTES_DB_ID)) {
+    await waClient.sendMessage(originalMsg.from, '⚠️ Notion לא מוגדר — הוסף NOTION_API_KEY ו-NOTION_NOTES_DB_ID ל-.env');
+    return;
+  }
+  switch (intent) {
+    case 'invoice':           await handleMorningCommand(originalMsg); break;
+    case 'note_save':         await saveNote(msgText, originalMsg, ai, modelName, waClient); break;
+    case 'note_search':       await searchNotes(msgText, originalMsg, ai, modelName, waClient); break;
+    case 'note_summary_day':  await getDailySummary(originalMsg, ai, modelName, waClient); break;
+    case 'note_summary_week': await getWeeklySummary(originalMsg, ai, modelName, waClient); break;
+    case 'note_chat':         await chatWithNotes(msgText, originalMsg, ai, modelName, waClient); break;
+    case 'note_remind':       await scheduleReminder(msgText, originalMsg, ai, modelName, waClient); break;
+    default:                  await handleGcCommand(originalMsg);
+  }
+}
+
+async function handleIntentConfirm(msg, ai, modelName, waClient) {
+  if (!pendingIntentConfirm.has(msg.from)) return false;
+  const choice = msg.body.trim();
+  if (!/^\d$/.test(choice)) {
+    pendingIntentConfirm.delete(msg.from);
+    return false; // treat as a new message
   }
 
+  const { options, originalMsg, msgText } = pendingIntentConfirm.get(msg.from);
+  pendingIntentConfirm.delete(msg.from);
+
+  const intent = options[parseInt(choice, 10) - 1];
+  if (!intent || intent === 'cancel') {
+    await waClient.sendMessage(msg.from, '👍 ביטול.');
+    return true;
+  }
+  await executeIntent(intent, msgText, originalMsg, ai, modelName, waClient);
+  return true;
+}
+
+async function handleMorningCommand(msg) {
   const contact = await msg.getContact();
   const contactName = contact.pushname || contact.number || "User";
   console.log(`Received Morning Command message from ${contactName}: ${msg.body}`);
@@ -110,8 +226,7 @@ client.on('message', async msg => {
 
   try {
     console.log(`Sending WhatsApp message to Gemini...`);
-    
-    // Truly instant acknowledgement before the LLM even starts thinking
+
     await client.sendMessage(msg.from, "⏳ מעבד את הבקשה... (Processing...)");
 
     const chat = ai.chats.create({
@@ -125,23 +240,22 @@ client.on('message', async msg => {
 
     let result = await chat.sendMessage({ message: msg.body });
 
-    // Handle tool calls
     while (result.functionCalls && result.functionCalls.length > 0) {
       const functionCall = result.functionCalls[0];
       console.log(`Gemini is calling tool: ${functionCall.name}`);
-      
+
       try {
         const mcpResponse = await mcpClient.callTool({
           name: functionCall.name,
           arguments: functionCall.args
         });
-        
+
         let functionResponseData = { result: "Tool executed but no specific output returned." };
         if (mcpResponse.content && mcpResponse.content.length > 0) {
           try {
-             functionResponseData = JSON.parse(mcpResponse.content[0].text);
+            functionResponseData = JSON.parse(mcpResponse.content[0].text);
           } catch(e) {
-             functionResponseData = { result: mcpResponse.content[0].text };
+            functionResponseData = { result: mcpResponse.content[0].text };
           }
         } else if (mcpResponse.isError) {
           functionResponseData = { error: "The tool returned an error." };
@@ -170,19 +284,140 @@ client.on('message', async msg => {
     }
 
     const finalResponse = result.text;
-    
-    // Save updated history
+
     const updatedHistory = await chat.getHistory();
     chatHistories.set(msg.from, updatedHistory);
-    
-    // Reply on WhatsApp
+
     await client.sendMessage(msg.from, finalResponse);
 
   } catch (error) {
     console.error("Error processing message:", error);
     await client.sendMessage(msg.from, "Sorry, I encountered an error while processing your request.");
   }
+}
+
+// gc command: general Gemini queries and image analysis
+async function handleGcCommand(msg) {
+  const commandBody = msg.body.trim();
+  const parts = [];
+
+  if (msg.hasMedia && msg.type === 'image') {
+    await client.sendMessage(msg.from, "⏳ מנתח תמונה... (Analyzing image...)");
+    const media = await msg.downloadMedia();
+    if (media) parts.push({ inlineData: { mimeType: media.mimetype, data: media.data } });
+  } else {
+    await client.sendMessage(msg.from, "⏳ מעבד... (Processing...)");
+  }
+
+  const prompt = commandBody.length > 0 ? commandBody
+    : parts.length > 0 ? "Analyze this image and describe or extract all visible text."
+    : null;
+
+  if (!prompt) {
+    await client.sendMessage(msg.from, "Usage: gc <question> or send an image with gc as caption.");
+    return;
+  }
+  parts.push({ text: prompt });
+
+  try {
+    const result = await ai.models.generateContent({
+      model: modelName,
+      contents: [{ parts }],
+      config: {
+        systemInstruction: "You are a helpful AI assistant. Reply in the same language as the user. Be concise."
+      }
+    });
+    await client.sendMessage(msg.from, result.text || "No response generated.");
+  } catch (err) {
+    console.error("GC command error:", err);
+    await client.sendMessage(msg.from, "Sorry, I encountered an error.");
+  }
+}
+
+client.on('message', async msg => {
+  if (msg.from === 'status@broadcast') return;
+
+  // Voice notes → pipeline menu immediately (no processing yet)
+  if (msg.type === 'ptt' || msg.type === 'audio') {
+    await handleVoiceNote(msg, ai, modelName, client);
+    return;
+  }
+
+  // Pending voice menu replies (Menu 1 and Menu 2)
+  if (await handleVoiceReply(msg, ai, modelName, client)) return;
+
+  // Pending intent confirmation menu
+  if (await handleIntentConfirm(msg, ai, modelName, client)) return;
+
+  const msgText = msg.body.trim();
+  const lower = msgText.toLowerCase();
+
+  if (lower === 'help' || lower === 'עזרה') {
+    await handleHelpCommand(msg);
+    return;
+  }
+
+  // Image → analyze directly (intent is unambiguous)
+  if (msg.hasMedia && msg.type === 'image') {
+    await handleGcCommand(msg);
+    return;
+  }
+
+  // Bare phone number → wa.me link directly
+  const digits = msgText.replace(/\D/g, '');
+  if (/^[+\d][\d\s\-(). ]+$/.test(msgText) && digits.length >= 7 && digits.length <= 15) {
+    const normalized = digits.startsWith('972') ? digits
+      : digits.startsWith('0') ? '972' + digits.slice(1)
+      : '972' + digits;
+    await client.sendMessage(msg.from, `https://wa.me/${normalized}`);
+    return;
+  }
+
+  // Classify intent → show confirmation menu
+  let intent = 'general';
+  try { intent = await classifyIntent(msgText, ai, modelName); } catch (_) {}
+
+  const { options, menuText } = buildConfirmMenu(intent);
+  pendingIntentConfirm.set(msg.from, { options, originalMsg: msg, msgText });
+  await client.sendMessage(msg.from, menuText);
 });
+
+// Start reminders after WhatsApp is ready (also fires on reconnect)
+client.on('ready', () => {
+  armAllReminders(client);
+  setInterval(() => checkReminders(client), 30 * 1000);
+
+  if (process.env.WHATSAPP_PHONE) {
+    const me = `${process.env.WHATSAPP_PHONE}@c.us`;
+    client.sendMessage(me, '✅ הסוכן מוכן לפקודות').catch(console.error);
+  }
+});
+
+async function handleHelpCommand(msg) {
+  const text = `🤖 *הסוכן החכם שלך*
+פשוט כתוב מה שאתה רוצה — הסוכן יבין ויציע תפריט.
+
+🎙️ *הודעה קולית* — שלח ותקבל תפריט:
+  תמלול • ניתוח • כיווני חשיבה • הכל
+
+📊 *GreenInvoice* — לדוגמה:
+  "צור חשבונית מס קבלה על 500 לישראל ישראלי"
+  "רשימת לקוחות"
+
+📋 *Notion* — לדוגמה:
+  "שמור רעיון על..."
+  "חפש רשימות בנושא..."
+  "תן לי סיכום של היום"
+  "קבע תזכורת למחר ב-9 ל..."
+
+🤖 *AI כללי* — כל שאלה חופשית
+  + תמונה — OCR / ניתוח תמונה
+
+📱 *קישור WhatsApp* — שלח מספר טלפון בלבד
+
+*עזרה / help* — הצג הודעה זו`;
+  await client.sendMessage(msg.from, text);
+}
 
 // --- Email Setup ---
 let emailTransporter;
