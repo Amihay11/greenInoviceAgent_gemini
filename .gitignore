@@ -12,5 +12,11 @@ agent/agent.log
 agent/agent-error.log
 agent/whatsapp-auth/
 
+# Phase 2: Shaul's long-term memory (SQLite) — local-only, never commit
+agent/data/
+*.db
+*.db-shm
+*.db-wal
+
 # Portable binaries
 node/

@@ -1,6 +1,6 @@
-# GreenInvoice WhatsApp Agent
+# GreenInvoice + Shaul WhatsApp Agent
 
-An AI-powered WhatsApp agent that connects to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). Send a WhatsApp message to your own number and the agent handles invoices, receipts, clients, and more — plus general-purpose AI tasks.
+An AI-powered WhatsApp agent built around **Shaul** — your Israeli business and marketing mentor. Phase 1 connects Shaul to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). **Phase 2 turns Shaul into a full marketing department** with sub-agents (Strategist, Creative, Campaign Manager, Publisher, Analyst, Mentor), Facebook & Instagram publishing, and a SQLite long-term memory you can browse in the dashboard.
 
 ---
 
@@ -8,6 +8,7 @@ An AI-powered WhatsApp agent that connects to the [GreenInvoice](https://www.gre
 
 - [How It Works](#how-it-works)
 - [Commands](#commands)
+- [Phase 2: Shaul as Marketing Department](#phase-2-shaul-as-marketing-department)
 - [Architecture](#architecture)
 - [File Structure](#file-structure)
 - [Setup — Windows](#setup--windows)
@@ -122,17 +123,100 @@ Returns the full command reference in Hebrew.
 
 ---
 
+## Phase 2: Shaul as Marketing Department
+
+Shaul is no longer just a chatbot — he's a **CMO orchestrator** who delegates to a team of specialist sub-agents. Each sub-agent has its own role, system prompt, and tools. Long-term memory lives in a SQLite database you can browse from the dashboard. The architecture follows the Anthropic orchestrator-worker pattern (lead agent + structured-result subagents) with CrewAI-style tiered memory (short-term, long-term, entity, external).
+
+### The team
+
+| Sub-agent | Role | Tools |
+|-----------|------|-------|
+| **Strategist** | Runs the discovery interview; distills user messages into profile updates | SQL memory |
+| **Creative** | Writes ad copy, captions, image briefs, multiple angle variations | Gemini |
+| **Campaign Manager** | Plans full campaigns: objective, audience, budget, schedule, KPIs | SQL memory |
+| **Publisher** | Pure executor — posts approved drafts to Facebook Page & Instagram Business | Meta Graph API v21 |
+| **Analyst** | Pulls daily metrics, writes weekly reports in plain Hebrew | Meta Insights API + SQL |
+| **Mentor (Shaul)** | The voice the user hears; synthesises everything; runs weekly self-reflection | All of memory |
+
+### Self-awareness & self-adaptation loop
+
+1. **Onboarding** (first run, `mk onboard`) — Strategist asks 9 progressive questions about your business, ICP, offer, budget, channels, brand voice, constraints. Saved to `business_profile`.
+2. **Continuous learning** — every WhatsApp interaction is logged to `interactions`. Sub-agents read `business_profile` + `learned_insights` before every response, so output evolves as Shaul learns you.
+3. **Weekly reflection** (`mk reflect`) — Mentor reads the last ~60 interactions + campaign results, writes a `reflections` row, and appends new `learned_insights` (e.g. *"user prefers reels over static posts (conf 0.8)"*). Future replies get grounded in these insights.
+4. **Approval gates** — every action that posts to FB/IG, spends money, or saves a major plan requires explicit `אישור` / `approve`. Shaul never publishes on his own.
+
+### `mk` commands
+
+| Command | What it does |
+|---|---|
+| `mk onboard` | Start (or restart) the discovery interview |
+| `mk plan <goal>` | Campaign Manager drafts a complete campaign plan; awaits approval |
+| `mk post <idea>` | Creative drafts an Instagram post; awaits approval to publish |
+| `mk fb <idea>` | Same, but for Facebook |
+| `mk schedule` | List scheduled & pending posts |
+| `mk campaigns` | List all your campaigns with status |
+| `mk report` | Analyst's plain-Hebrew weekly report |
+| `mk reflect` | Trigger Mentor self-reflection — distills new insights |
+| `mk memory` | Show the compact context Shaul holds about you |
+| `mk help` | Show all `mk` commands |
+
+Plain text without `mk` is also auto-routed: the intent classifier has a new `marketing` category that routes through the CMO.
+
+### Long-term memory (SQLite, viewable in dashboard)
+
+Tables created automatically in `agent/data/shaul-memory.db` on first interaction:
+
+| Table | Holds |
+|-------|-------|
+| `business_profile` | One row per user — name, industry, offer, ICP, brand voice, budget, channels, constraints |
+| `interactions` | Every user/agent message (short-term memory, paginated) |
+| `learned_insights` | Distilled long-term lessons with confidence scores |
+| `entities` | People, products, competitors mentioned over time |
+| `campaigns` | Planned/active/completed campaigns with full plan JSON |
+| `creatives` | Drafted copy/captions/image briefs |
+| `posts` | Approved/scheduled/published/failed posts on FB/IG |
+| `insights_daily` | Daily metric snapshots from Meta |
+| `goals` | Tracked goals with target + deadline |
+| `reflections` | Weekly self-reflections from the Mentor |
+
+Browse, paginate, and delete rows in your browser at **http://localhost:3001/memory** (linked from the main dashboard).
+
+### Meta API setup (for publishing)
+
+To enable the Publisher sub-agent, fill in `META_PAGE_ID`, `META_PAGE_TOKEN`, and `IG_BUSINESS_ID` in `agent/.env`. Without them, Shaul still drafts campaigns and creatives — they're just saved to memory instead of being posted. Steps to get the tokens are documented in `agent/.env.example`.
+
+Publishing rules enforced:
+- Instagram requires an `image_url` — Shaul will hold the post in `pending_image` status until you provide one
+- IG container is polled until `FINISHED` before publishing (per Meta's 2-step content publishing API)
+- Scheduled posts auto-publish on a 60-second loop once their `scheduled_at` is reached
+
+---
+
 ## Architecture
 
 ```
 greenInoviceAgent_gemini/
-├── agent/               # Node.js WhatsApp agent
-│   └── index.js         # Main entry point
-└── GreenInvoice-MCP-main/  # TypeScript MCP server
+├── agent/                        # Node.js WhatsApp agent
+│   ├── index.js                  # Main router
+│   ├── noteHandler.js            # Notion integration
+│   ├── personality/shaul.js      # Persona, prompts, copy
+│   └── marketing/                # Phase 2 — marketing department
+│       ├── cmo.js                # Orchestrator
+│       ├── memory.js             # SQLite long-term memory
+│       ├── meta.js               # Facebook + Instagram Graph API
+│       └── subagents/
+│           ├── common.js         # Shared prompt builder
+│           ├── strategist.js     # Onboarding + profile refinement
+│           ├── creative.js       # Copy & image briefs
+│           ├── campaignManager.js
+│           ├── publisher.js      # Pure FB/IG publishing executor
+│           ├── analyst.js        # Insights + weekly reports
+│           └── mentor.js         # Synthesizing voice + self-reflection
+└── GreenInvoice-MCP-main/        # TypeScript MCP server
     └── src/
-        ├── index.ts     # MCP server entry
-        ├── client.ts    # GreenInvoice API HTTP client
-        └── tools.ts     # 10 MCP tools (66 API endpoints)
+        ├── index.ts              # MCP server entry
+        ├── client.ts             # GreenInvoice API HTTP client
+        └── tools.ts              # 10 MCP tools (66 API endpoints)
 ```
 
 ### Message Router (`agent/index.js`)

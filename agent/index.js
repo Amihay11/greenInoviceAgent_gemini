@@ -25,6 +25,7 @@ import {
   INTENT_LABELS,
   HELP_TEXT,
 } from './personality/shaul.js';
+import { handleMarketingMessage, processScheduledPosts } from './marketing/cmo.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -145,6 +146,7 @@ async function classifyIntent(text, ai, modelName) {
 
 Categories:
 - invoice: GreenInvoice tasks — creating invoices, receipts, tax documents, listing clients or documents
+- marketing: anything about Facebook/Instagram, ads, posts, campaigns, audience, brand, content, marketing strategy, asking Shaul for marketing advice
 - note_remind: setting a reminder for a specific future time
 - note_search: searching through saved notes or ideas
 - note_summary_day: summarizing today's saved notes
@@ -161,7 +163,7 @@ Message: "${text.slice(0, 400)}"` }] }]
 
 function buildConfirmMenu(intent) {
   const primary = INTENT_LABEL[intent];
-  const alts = ['note_save', 'invoice', 'general']
+  const alts = ['marketing', 'note_save', 'invoice', 'general']
     .filter(k => k !== intent)
     .map(k => ({ key: k, label: INTENT_LABEL[k] }))
     .slice(0, 2);
@@ -187,6 +189,7 @@ async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClie
   }
   switch (intent) {
     case 'invoice':           await handleMorningCommand(originalMsg); break;
+    case 'marketing':         await handleMkRouted(originalMsg, msgText, ai, modelName, waClient); break;
     case 'note_save':         await saveNote(msgText, originalMsg, ai, modelName, waClient); break;
     case 'note_search':       await searchNotes(msgText, originalMsg, ai, modelName, waClient); break;
     case 'note_summary_day':  await getDailySummary(originalMsg, ai, modelName, waClient); break;
@@ -194,6 +197,16 @@ async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClie
     case 'note_chat':         await chatWithNotes(msgText, originalMsg, ai, modelName, waClient); break;
     case 'note_remind':       await scheduleReminder(msgText, originalMsg, ai, modelName, waClient); break;
     default:                  await handleGcCommand(originalMsg);
+  }
+}
+
+async function handleMkRouted(originalMsg, msgText, ai, modelName, waClient) {
+  try {
+    const reply = await handleMarketingMessage({ chatId: originalMsg.from, text: msgText, ai, modelName });
+    if (reply) await waClient.sendMessage(originalMsg.from, reply);
+  } catch (err) {
+    console.error('Marketing handler error:', err);
+    await waClient.sendMessage(originalMsg.from, `שגיאה במחלקת השיווק: ${err.message}`);
   }
 }
 
@@ -361,6 +374,12 @@ client.on('message', async msg => {
     return;
   }
 
+  // Marketing department — explicit prefix bypasses intent classifier.
+  if (lower.startsWith('mk ') || lower === 'mk') {
+    await handleMkRouted(msg, msgText, ai, modelName, client);
+    return;
+  }
+
   // Image → analyze directly (intent is unambiguous)
   if (msg.hasMedia && msg.type === 'image') {
     await handleGcCommand(msg);
@@ -390,6 +409,11 @@ client.on('message', async msg => {
 client.on('ready', () => {
   armAllReminders(client);
   setInterval(() => checkReminders(client), 30 * 1000);
+
+  // Marketing: publish any due scheduled FB/IG posts every minute.
+  setInterval(() => {
+    processScheduledPosts().catch(err => console.error('Scheduled-posts loop error:', err.message));
+  }, 60 * 1000);
 
   if (process.env.WHATSAPP_PHONE) {
     const me = `${process.env.WHATSAPP_PHONE}@c.us`;
