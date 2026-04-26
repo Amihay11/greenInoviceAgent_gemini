@@ -28,9 +28,18 @@ export async function nextBestActions({ userId, ai, modelName, max = 5 }) {
   const insights = recentInsights(userId, 14);
   const attendance = recentAttendance(userId, 6);
 
+  const today = new Date().toISOString().slice(0, 10);
+  const knownFields = profile
+    ? Object.entries(profile)
+        .filter(([k, v]) => v !== null && v !== '' && !['user_id', 'created_at', 'updated_at', 'onboarding_done', 'onboarding_step'].includes(k))
+        .map(([k]) => k)
+    : [];
+
   const prompt = buildPrompt({
     userId,
     role: `You are the Director — Shaul's head of marketing strategy. You take ownership of the user's marketing. You don't wait. You look at what is known and decide the highest-leverage actions Shaul should TAKE next. The user is your boss; you save them time by drafting work for them to approve, not by asking them to do anything.
+
+TODAY'S DATE: ${today}. ALL due_at values MUST be on or after ${today}. Never produce a date in the past.
 
 Rank actions by leverage × urgency. Only emit actions that are CONCRETE and EXECUTABLE this week.
 
@@ -39,11 +48,16 @@ Action kinds Shaul can do:
   - plan_campaign: build a full campaign plan
   - pull_metrics:  check FB/IG insights and report
   - check_attendance: ask the user to log workshop headcount for a recent session
-  - probe_user:    ask the user one specific question (only if a critical gap blocks work)
+  - probe_user:    ask the user one specific question — ONLY if a critical gap blocks work AND the answer is NOT already in the business_profile or goals. Do NOT probe for fields we already know.
   - revise_campaign: a campaign is off-track; suggest changes
   - reflect:       run weekly self-reflection (only if it's been 7+ days)
-  - draft_calendar: build a 14- or 30-day content calendar`,
-    task: `Look at everything in memory. What are the next ${max} highest-leverage moves? Be specific.`,
+  - draft_calendar: build a 14- or 30-day content calendar
+
+PROFILE FIELDS ALREADY KNOWN (do NOT probe for these): ${knownFields.join(', ') || '(none)'}
+ACTIVE GOALS ALREADY SET: ${goals.length} goal(s) — ${goals.length > 0 ? 'do NOT propose another probe for "what is the goal"' : 'goal probing IS allowed'}.
+
+Prefer drafting and planning over probing. The user said they want Shaul to WORK, not interrogate.`,
+    task: `Look at everything in memory. What are the next ${max} highest-leverage moves Shaul should DO this week? Drafting > probing. Today is ${today}.`,
     schemaHint: `{
   "actions": [
     {
@@ -51,15 +65,16 @@ Action kinds Shaul can do:
       "title": "short Hebrew title (≤60 chars) — what Shaul will DO",
       "detail": "1-2 sentence specifics on what to draft / which campaign / which question",
       "priority": 1-10,
-      "due_at": "YYYY-MM-DD"|null,
+      "due_at": "YYYY-MM-DD on or after ${today}"|null,
       "execute_immediately": true|false
     }
   ]
 }
 - priority 1 = drop everything, 10 = nice to have
 - execute_immediately = true ONLY for safe actions (draft_post, plan_campaign, pull_metrics, draft_calendar). Anything that needs user input gets execute_immediately = false and goes to the agenda.
-- Never propose to publish anything. Drafting and approval are separate.`,
-    extra: `EXTRA SIGNAL:\nrecent posts (${posts.length}): ${posts.slice(0, 3).map(p => `#${p.id}/${p.platform}/${p.status}`).join(', ')}\nactive campaigns: ${campaigns.filter(c => c.status === 'active').length}\nattendance entries: ${attendance.length}\nactive goals: ${goals.length}\ninsights pulled (14d): ${insights.length}`,
+- Never propose to publish anything. Drafting and approval are separate.
+- Reject your own action if it duplicates a profile field we already know.`,
+    extra: `EXTRA SIGNAL:\ntoday: ${today}\nrecent posts (${posts.length}): ${posts.slice(0, 3).map(p => `#${p.id}/${p.platform}/${p.status}`).join(', ')}\nactive campaigns: ${campaigns.filter(c => c.status === 'active').length}\nattendance entries: ${attendance.length}\nactive goals: ${goals.length}\ninsights pulled (14d): ${insights.length}`,
   });
 
   const { json } = await runSubagent({ ai, modelName, prompt });
@@ -71,6 +86,9 @@ Action kinds Shaul can do:
 export async function refreshAgenda({ userId, ai, modelName }) {
   // Garbage-collect stale pending items first.
   clearStaleAgenda(userId, 14);
+
+  // Auto-complete probe_user items whose answer is now in business_profile or goals.
+  cleanupStaleProbes(userId);
 
   const actions = await nextBestActions({ userId, ai, modelName, max: 5 });
   if (!actions.length) return [];
@@ -175,4 +193,36 @@ export function markAgendaDone(id) {
 
 export function markAgendaSkipped(id) {
   setAgendaStatus(id, 'skipped');
+}
+
+// Cleanup probe_user items whose answer is already in business_profile / goals.
+// Looks for keyword matches in the title — pragmatic, not perfect.
+function cleanupStaleProbes(userId) {
+  const profile = getProfile(userId);
+  const goals = listGoals(userId, 'active');
+  const items = listAgenda(userId, 'pending', 50).filter(a => a.kind === 'probe_user');
+  if (!items.length) return;
+
+  const has = {
+    offer:      Boolean(profile?.offer),
+    icp:        Boolean(profile?.icp),
+    goals:      goals.length > 0,
+    budget:     profile?.monthly_budget !== null && profile?.monthly_budget !== undefined,
+    voice:      Boolean(profile?.brand_voice),
+    channels:   Boolean(profile?.channels),
+    constraint: Boolean(profile?.constraints),
+  };
+
+  for (const a of items) {
+    const t = (a.title + ' ' + (a.detail || '')).toLowerCase();
+    let stale = false;
+    if (has.offer && /(העסק|מה.*עושה|מה.*מוכר|אונבורדינג)/.test(t)) stale = true;
+    if (has.icp && /(קהל.*יעד|לקוח.*אידיאלי|icp|target)/.test(t)) stale = true;
+    if (has.goals && /(מטרה|יעד.*רבעון|goal|הגדר.*יעד)/.test(t)) stale = true;
+    if (has.budget && /(תקציב|budget)/.test(t)) stale = true;
+    if (has.voice && /(טון|סגנון|brand.*voice|voice)/.test(t)) stale = true;
+    if (has.channels && /(ערוצי|channel)/.test(t)) stale = true;
+    if (has.constraint && /(אסור|constraint|להימנע)/.test(t)) stale = true;
+    if (stale) setAgendaStatus(a.id, 'auto_done');
+  }
 }

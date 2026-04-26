@@ -147,8 +147,20 @@ async function silentExtraction({ userId, userMessage, ai, modelName }) {
     });
   }
 
+  // Auto-flip onboarding_done once we have enough to operate (offer + icp +
+  // at least one active goal). Conversation IS the onboarding for this user.
+  maybeMarkOnboardingDone(userId);
+
   // After extraction, refresh the agenda so Director surfaces new actions.
   try { await director.refreshAgenda({ userId, ai, modelName }); } catch (_) {}
+}
+
+function maybeMarkOnboardingDone(userId) {
+  const p = getProfile(userId);
+  if (!p || p.onboarding_done) return;
+  if (p.offer && p.icp && listGoals(userId, 'active').length > 0) {
+    updateProfile(userId, { onboarding_done: 1 });
+  }
 }
 
 // ── mk subcommands ───────────────────────────────────────────────────────────
@@ -174,6 +186,7 @@ async function handleMkCommand({ chatId, sub, arg, ai, modelName }) {
     case 'go':         return executeTopAgenda({ chatId, ai, modelName });
     case 'skip':       return skipTopAgenda({ userId, arg });
     case 'publish':    return publishCommand({ userId, arg });
+    case 'cleanup':    return cleanupCommand({ userId, ai, modelName });
     case 'help':       return reply(userId, MK_HELP);
     default:           return reply(userId, `לא מכיר את ${sub}. נסה: ${MK_HELP}`);
   }
@@ -287,6 +300,18 @@ function skipTopAgenda({ userId, arg }) {
   if (!top) return reply(userId, '📭 אין מה לדלג.');
   director.markAgendaSkipped(top.id);
   return reply(userId, `⏭ דילגתי על "${top.title}". *mk go* לפעולה הבאה.`);
+}
+
+// "mk cleanup" — flip onboarding_done if data is sufficient, drop stale probe
+// items, refresh the agenda. Useful right after a bug fix when the existing
+// DB has stale rows.
+async function cleanupCommand({ userId, ai, modelName }) {
+  maybeMarkOnboardingDone(userId);
+  await reply(userId, '🧹 מנקה אג׳נדה ישנה ומרענן...');
+  try { await director.refreshAgenda({ userId, ai, modelName }); } catch (e) {
+    return reply(userId, `❌ שגיאה: ${e.message}`);
+  }
+  return reply(userId, '✅ נקי. שלח *mk agenda* לראות את הרשימה החדשה.');
 }
 
 // "mk publish 42" — user explicitly approves a scheduled or queued post.
@@ -617,6 +642,9 @@ const MK_HELP = `📣 *שאול — מחלקת השיווק שלך*
   mk attendance "תווית" 12  — רושם נוכחות בסדנה
   mk report           — דוח שבועי (שיווק + נוכחות)
   mk reflect          — אני מסיק מסקנות עלייך
+
+🧹 *תחזוקה:*
+  mk cleanup          — מנקה אג'נדה ישנה ומרענן
 
 _כדי שאעשה משהו: כתוב לי מה אתה צריך, או פשוט "יאללה"._`;
 
