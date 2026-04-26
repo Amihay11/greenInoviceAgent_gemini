@@ -10,9 +10,15 @@ const PID_FILE  = path.join(ROOT_DIR, 'agent.pid');
 const LOG_FILE  = path.join(ROOT_DIR, 'agent.log');
 const START_SH  = path.join(ROOT_DIR, 'start-background.sh');
 const STOP_SH   = path.join(ROOT_DIR, 'stop.sh');
-const DB_PATH   = process.env.SHAUL_DB_PATH || path.join(AGENT_DIR, 'data', 'shaul-memory.db');
 const PORT      = parseInt(process.env.DASHBOARD_PORT || '3001', 10);
 const IS_WIN    = process.platform === 'win32';
+
+// Load agent/.env so SHAUL_DB_PATH (and any DASHBOARD_PORT/etc) flow through.
+// dotenv lives in agent/node_modules — try-load it; harmless if missing.
+try {
+  const dotenv = require(path.join(AGENT_DIR, 'node_modules', 'dotenv'));
+  dotenv.config({ path: path.join(AGENT_DIR, '.env') });
+} catch (_) { /* dotenv optional */ }
 
 // ── memory DB (lazy, optional) ───────────────────────────────────────────────
 const VIEWABLE_TABLES = [
@@ -20,15 +26,40 @@ const VIEWABLE_TABLES = [
   'campaigns', 'creatives', 'posts', 'insights_daily', 'goals', 'reflections',
   'agenda_items', 'attendance', 'discovery_state', 'daily_briefings',
 ];
+
+// Probe multiple known paths — the agent and the dashboard occasionally end up
+// with different cwds or env, so we look in every reasonable spot before
+// giving up.
+const DB_CANDIDATES = [
+  process.env.SHAUL_DB_PATH,
+  path.join(AGENT_DIR, 'data', 'shaul-memory.db'),
+  path.join(AGENT_DIR, 'marketing', 'data', 'shaul-memory.db'),
+  path.join(ROOT_DIR, 'data', 'shaul-memory.db'),
+].filter(Boolean);
+
 let memDb = null;
+let memDbPath = null;
+let memDbLastError = null;
+
+function findExistingDbPath() {
+  for (const p of DB_CANDIDATES) {
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
+  }
+  return null;
+}
+
 function getMemDb() {
   if (memDb) return memDb;
-  if (!fs.existsSync(DB_PATH)) return null;
+  const p = findExistingDbPath();
+  if (!p) { memDbLastError = `no DB at any of: ${DB_CANDIDATES.join(', ')}`; return null; }
   try {
     const Database = require('better-sqlite3');
-    memDb = new Database(DB_PATH, { readonly: false, fileMustExist: true });
+    memDb = new Database(p, { readonly: false, fileMustExist: true });
+    memDbPath = p;
+    memDbLastError = null;
     return memDb;
-  } catch (_) {
+  } catch (e) {
+    memDbLastError = `open failed at ${p}: ${e.message}`;
     return null;
   }
 }
@@ -199,13 +230,15 @@ function apiLogsTail(req, res) {
 
 function apiMemoryTables(req, res) {
   const db = getMemDb();
-  if (!db) return sendJSON(res, 200, { available: false, tables: [] });
+  if (!db) return sendJSON(res, 200, {
+    available: false, tables: [], error: memDbLastError, candidates: DB_CANDIDATES,
+  });
   const counts = {};
   for (const t of VIEWABLE_TABLES) {
     try { counts[t] = db.prepare(`SELECT COUNT(*) as c FROM ${t}`).get().c; }
     catch (_) { counts[t] = 0; }
   }
-  sendJSON(res, 200, { available: true, tables: VIEWABLE_TABLES, counts });
+  sendJSON(res, 200, { available: true, tables: VIEWABLE_TABLES, counts, db_path: memDbPath });
 }
 
 function apiMemoryRows(req, res) {
@@ -301,7 +334,14 @@ async function loadTabs() {
   const r = await fetch('/api/memory/tables');
   const d = await r.json();
   if (!d.available) {
-    document.getElementById('content').innerHTML = '<div class="empty">📭 Memory DB not created yet. Talk to Shaul on WhatsApp first (try "mk onboard").</div>';
+    const cands = (d.candidates || []).map(c => '<li><code>' + c + '</code></li>').join('');
+    const errLine = d.error ? '<p style="color:#fbbf24;font-size:.78rem;margin-top:8px"><b>error:</b> ' + escapeHtml(d.error) + '</p>' : '';
+    document.getElementById('content').innerHTML =
+      '<div class="empty"><p>📭 Memory DB not found.</p>'
+      + '<p style="font-size:.8rem;margin-top:10px">Looked at:</p>'
+      + '<ul style="text-align:left;display:inline-block;font-size:.75rem;margin-top:4px;color:#9ca3af">' + cands + '</ul>'
+      + errLine
+      + '<p style="font-size:.78rem;margin-top:14px;color:#9ca3af">If you have data via <code>mk memory</code>, set <code>SHAUL_DB_PATH</code> in <code>agent/.env</code> to point here.</p></div>';
     return;
   }
   const tabs = document.getElementById('tabs');
