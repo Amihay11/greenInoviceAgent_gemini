@@ -25,7 +25,12 @@ import {
   INTENT_LABELS,
   HELP_TEXT,
 } from './personality/shaul.js';
-import { handleMarketingMessage, processScheduledPosts, getDailyBriefingsToSend } from './marketing/cmo.js';
+import {
+  handleMarketingMessage, processScheduledPosts, getDailyBriefingsToSend,
+  registerSendWhatsappPending, hasPendingSendWhatsapp,
+} from './marketing/cmo.js';
+import { parseAllowList, normalizeJid } from './marketing/jid.js';
+import { logCalendarEvent } from './marketing/memory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -45,50 +50,220 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
 console.log(`Shaul is running on model: ${modelName}`);
 
-// --- MCP Setup ---
-let mcpClient;
-let mcpTools = [];
+// --- MCP Setup (multi-server) ---
+const mcpClients = [];           // [{ name, client }]
+let mcpTools = [];                // Gemini function declarations from all servers
+const toolToClientMap = new Map(); // toolName -> MCPClient
+const toolServerMap = new Map();   // toolName -> server name (for audit + routing)
 
-async function setupMCP() {
-  console.log("Starting GreenInvoice MCP Server...");
-  const transport = new StdioClientTransport({
-    command: process.env.NODE_EXECUTABLE || 'node',
-    args: [process.env.MCP_SERVER_PATH],
-    env: {
-      ...process.env,
-      GREENINVOICE_API_ID: process.env.GREENINVOICE_API_ID,
-      GREENINVOICE_API_SECRET: process.env.GREENINVOICE_API_SECRET
-    }
-  });
-
-  mcpClient = new MCPClient({ name: "whatsapp-agent", version: "1.0.0" }, { capabilities: {} });
-  await mcpClient.connect(transport);
-  console.log("Connected to GreenInvoice MCP.");
-
-  // Fetch available tools from the MCP server
-  const toolsResponse = await mcpClient.listTools();
-  
-  // Convert MCP tools to Gemini function declarations
-  mcpTools = toolsResponse.tools.map(tool => ({
+function toolToGeminiDeclaration(tool) {
+  return {
     name: tool.name,
     description: tool.description,
     parameters: {
       type: "OBJECT",
       properties: Object.fromEntries(
-        Object.entries(tool.inputSchema?.properties || {}).map(([key, value]) => [
-          key,
-          {
-            type: value.type.toUpperCase(),
+        Object.entries(tool.inputSchema?.properties || {}).map(([key, value]) => {
+          const prop = {
+            type: (value.type || 'string').toUpperCase(),
             description: value.description || "",
-            // Gemini requires items for array type
-            ...(value.type === 'array' && value.items ? { items: { type: value.items.type.toUpperCase() } } : {})
+          };
+          if (value.type === 'array' && value.items) {
+            prop.items = { type: (value.items.type || 'string').toUpperCase() };
           }
-        ])
+          return [key, prop];
+        })
       ),
-      required: tool.inputSchema?.required || []
+      required: tool.inputSchema?.required || [],
+    },
+  };
+}
+
+async function setupMCP() {
+  const servers = [
+    process.env.MCP_SERVER_PATH && {
+      name: 'GreenInvoice',
+      path: process.env.MCP_SERVER_PATH,
+      env: {
+        GREENINVOICE_API_ID: process.env.GREENINVOICE_API_ID,
+        GREENINVOICE_API_SECRET: process.env.GREENINVOICE_API_SECRET,
+      },
+    },
+    process.env.CALENDAR_MCP_PATH && {
+      name: 'GoogleCalendar',
+      path: process.env.CALENDAR_MCP_PATH,
+      env: {
+        GOOGLE_CALENDAR_CREDENTIALS: process.env.GOOGLE_CALENDAR_CREDENTIALS,
+        GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+        GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN,
+      },
+    },
+    process.env.CANVA_MCP_PATH && {
+      name: 'Canva',
+      path: process.env.CANVA_MCP_PATH,
+      env: { CANVA_API_KEY: process.env.CANVA_API_KEY },
+    },
+    process.env.META_MCP_PATH && {
+      name: 'Meta',
+      path: process.env.META_MCP_PATH,
+      env: {
+        META_PAGE_TOKEN: process.env.META_PAGE_TOKEN,
+        META_PAGE_ID: process.env.META_PAGE_ID,
+        IG_BUSINESS_ID: process.env.IG_BUSINESS_ID,
+      },
+    },
+  ].filter(Boolean);
+
+  for (const server of servers) {
+    try {
+      console.log(`Starting ${server.name} MCP server...`);
+      const transport = new StdioClientTransport({
+        command: process.env.NODE_EXECUTABLE || 'node',
+        args: [server.path],
+        env: { ...process.env, ...server.env },
+      });
+      const client = new MCPClient({ name: 'whatsapp-agent', version: '1.0.0' }, { capabilities: {} });
+      await client.connect(transport);
+      const toolsResponse = await client.listTools();
+      for (const tool of toolsResponse.tools) {
+        toolToClientMap.set(tool.name, client);
+        toolServerMap.set(tool.name, server.name);
+        mcpTools.push(toolToGeminiDeclaration(tool));
+      }
+      mcpClients.push({ name: server.name, client });
+      console.log(`Connected to ${server.name} MCP — ${toolsResponse.tools.length} tools.`);
+    } catch (err) {
+      console.error(`Failed to start ${server.name} MCP:`, err.message);
     }
-  }));
-  console.log(`Loaded ${mcpTools.length} tools from GreenInvoice MCP.`);
+  }
+  console.log(`Total MCP tools loaded: ${mcpTools.length}`);
+}
+
+// Convenience: the GreenInvoice client for code paths that need it directly
+// (e.g. contact lookup for send_whatsapp_message).
+function getGreenInvoiceClient() {
+  const entry = mcpClients.find(c => c.name === 'GreenInvoice');
+  return entry?.client || null;
+}
+
+// --- Local function-tool: send_whatsapp_message ---
+// Approval-gated: when Gemini calls this, we DO NOT send. We register the
+// pending approval in cmo.js and wait for the user to type אשר/בטל. The user's
+// next message routes through cmo.js where the approval gate fires.
+const SEND_WHATSAPP_DECL = {
+  name: 'send_whatsapp_message',
+  description: 'Propose sending a WhatsApp message to a client (NOT to the user themselves). The user will see a preview and must approve with "אשר" before the message is actually sent. Use AFTER looking up the phone via the GreenInvoice client tool. Never use to message the user — they are already in this conversation.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      phone: { type: 'STRING', description: 'Client phone in E.164 (972…) or local (0XX-XXX-XXXX). Will be normalized.' },
+      target_label: { type: 'STRING', description: 'Display name for the client (e.g. "דנה כהן"). Used in the approval preview.' },
+      message: { type: 'STRING', description: 'The full message body in the user\'s language (default Hebrew).' },
+    },
+    required: ['phone', 'message'],
+  },
+};
+
+async function handleSendWhatsappLocal({ chatId, args }) {
+  const { phone, message, target_label } = args || {};
+  const jid = normalizeJid(phone);
+  if (!jid) {
+    return { status: 'error', error: 'invalid phone number — could not normalize' };
+  }
+  if (!message || !String(message).trim()) {
+    return { status: 'error', error: 'empty message' };
+  }
+  // Don't let Gemini DM the user themselves.
+  if (jid === chatId) {
+    return { status: 'error', error: 'cannot send to the user themselves — they are already in this chat' };
+  }
+  registerSendWhatsappPending(chatId, { jid, message, targetLabel: target_label || null });
+  // Show the user the preview. The actual send happens in cmo.executeApproved
+  // when the user types אשר.
+  const preview = `📤 *לאשר שליחה ל${target_label ? ` *${target_label}*` : ''} (${phone})*?\n\n${message}\n\n_שלח *אשר* לשליחה, או *בטל* לביטול._`;
+  try { await client.sendMessage(chatId, preview); } catch (_) {}
+  return { status: 'pending_approval', preview_shown_to_user: true, message: 'Preview shown; awaiting user approval. Do NOT call this tool again — the user will reply אשר/בטל and the system will handle it.' };
+}
+
+// --- Shared Gemini tool-call loop ---
+function parseMcpResult(mcpResponse) {
+  if (mcpResponse?.content && mcpResponse.content.length > 0) {
+    try {
+      return JSON.parse(mcpResponse.content[0].text);
+    } catch (_) {
+      return { result: mcpResponse.content[0].text };
+    }
+  }
+  if (mcpResponse?.isError) return { error: 'The tool returned an error.' };
+  return { result: 'Tool executed but no specific output returned.' };
+}
+
+// Best-effort audit log for Calendar mutations. We can't reliably know which
+// tool name a given Calendar MCP exposes, so we match by server name.
+function maybeLogCalendarMutation({ chatId, toolName, args, response }) {
+  const server = toolServerMap.get(toolName);
+  if (server !== 'GoogleCalendar') return;
+  if (!/create|insert|update|delete|move|patch/i.test(toolName)) return;
+  try {
+    const ev = response?.event || response;
+    logCalendarEvent({
+      userId: chatId,
+      gcalEventId: ev?.id || ev?.eventId || null,
+      summary: ev?.summary || args?.summary || null,
+      startAt: ev?.start?.dateTime || ev?.start?.date || args?.start || args?.startDateTime || null,
+      endAt: ev?.end?.dateTime || ev?.end?.date || args?.end || args?.endDateTime || null,
+      toolName,
+      rawArgs: args,
+      rawResponse: response,
+    });
+  } catch (e) {
+    console.error('[calendar audit] failed:', e.message);
+  }
+}
+
+async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false }) {
+  const declarations = [...mcpTools, ...extraTools];
+  if (includeSendWhatsapp) declarations.push(SEND_WHATSAPP_DECL);
+
+  const chat = ai.chats.create({
+    model: modelName,
+    history,
+    config: {
+      tools: [
+        { functionDeclarations: declarations },
+        { googleSearch: {} },
+      ],
+      systemInstruction,
+    },
+  });
+
+  let result = await chat.sendMessage({ message });
+
+  while (result.functionCalls && result.functionCalls.length > 0) {
+    const fc = result.functionCalls[0];
+    console.log(`Gemini is calling tool: ${fc.name}`);
+    let response;
+    try {
+      if (fc.name === 'send_whatsapp_message') {
+        response = await handleSendWhatsappLocal({ chatId, args: fc.args || {} });
+      } else {
+        const c = toolToClientMap.get(fc.name);
+        if (!c) throw new Error(`No MCP client registered for tool: ${fc.name}`);
+        const mcpResponse = await c.callTool({ name: fc.name, arguments: fc.args || {} });
+        response = parseMcpResult(mcpResponse);
+        maybeLogCalendarMutation({ chatId, toolName: fc.name, args: fc.args, response });
+      }
+    } catch (err) {
+      console.error(`Error executing tool ${fc.name}:`, err.message);
+      response = { error: err.message };
+    }
+    result = await chat.sendMessage({
+      message: [{ functionResponse: { name: fc.name, response } }],
+    });
+  }
+
+  return { text: result.text, history: await chat.getHistory() };
 }
 
 // --- WhatsApp Setup ---
@@ -206,7 +381,15 @@ async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClie
 
 async function handleMkRouted(originalMsg, msgText, ai, modelName, waClient) {
   try {
-    const reply = await handleMarketingMessage({ chatId: originalMsg.from, text: msgText, ai, modelName });
+    const reply = await handleMarketingMessage({
+      chatId: originalMsg.from,
+      text: msgText,
+      ai,
+      modelName,
+      runGeminiWithTools,
+      getGreenInvoiceClient,
+      waClient,
+    });
     if (reply) await waClient.sendMessage(originalMsg.from, reply);
   } catch (err) {
     console.error('Marketing handler error:', err);
@@ -250,65 +433,14 @@ async function handleMorningCommand(msg) {
 
     await client.sendMessage(msg.from, PROCESSING_MESSAGES.invoice);
 
-    const chat = ai.chats.create({
-      model: modelName,
-      history: history,
-      config: {
-        tools: [{ functionDeclarations: mcpTools }],
-        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'invoice' })
-      }
+    const { text: finalResponse, history: updatedHistory } = await runGeminiWithTools({
+      chatId: msg.from,
+      history,
+      message: msg.body,
+      systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'invoice' }),
     });
 
-    let result = await chat.sendMessage({ message: msg.body });
-
-    while (result.functionCalls && result.functionCalls.length > 0) {
-      const functionCall = result.functionCalls[0];
-      console.log(`Gemini is calling tool: ${functionCall.name}`);
-
-      try {
-        const mcpResponse = await mcpClient.callTool({
-          name: functionCall.name,
-          arguments: functionCall.args
-        });
-
-        let functionResponseData = { result: "Tool executed but no specific output returned." };
-        if (mcpResponse.content && mcpResponse.content.length > 0) {
-          try {
-            functionResponseData = JSON.parse(mcpResponse.content[0].text);
-          } catch(e) {
-            functionResponseData = { result: mcpResponse.content[0].text };
-          }
-        } else if (mcpResponse.isError) {
-          functionResponseData = { error: "The tool returned an error." };
-        }
-
-        console.log(`Sending tool result back to Gemini...`);
-        result = await chat.sendMessage({
-          message: [{
-            functionResponse: {
-              name: functionCall.name,
-              response: functionResponseData
-            }
-          }]
-        });
-      } catch (error) {
-        console.error(`Error calling MCP tool ${functionCall.name}:`, error);
-        result = await chat.sendMessage({
-          message: [{
-            functionResponse: {
-              name: functionCall.name,
-              response: { error: error.message }
-            }
-          }]
-        });
-      }
-    }
-
-    const finalResponse = result.text;
-
-    const updatedHistory = await chat.getHistory();
     chatHistories.set(msg.from, updatedHistory);
-
     await client.sendMessage(msg.from, finalResponse);
 
   } catch (error) {
@@ -355,8 +487,21 @@ async function handleGcCommand(msg) {
   }
 }
 
+// Phone allow-list. Empty = accept everyone (preserves prior behaviour for
+// users who haven't configured it). Set SHAUL_ALLOWED_NUMBERS in .env to
+// restrict — e.g. SHAUL_ALLOWED_NUMBERS=0527203222,0546736909
+const ALLOW_LIST = parseAllowList(process.env.SHAUL_ALLOWED_NUMBERS);
+if (ALLOW_LIST.length > 0) {
+  console.log(`Allow-list active: ${ALLOW_LIST.join(', ')}`);
+}
+
 client.on('message', async msg => {
   if (msg.from === 'status@broadcast') return;
+
+  if (ALLOW_LIST.length > 0 && !ALLOW_LIST.includes(msg.from)) {
+    console.log(`[acl] dropped message from ${msg.from}`);
+    return;
+  }
 
   // Voice notes → pipeline menu immediately (no processing yet)
   if (msg.type === 'ptt' || msg.type === 'audio') {
@@ -570,39 +715,13 @@ async function processEmailMessage(sender, subject, text) {
 
   try {
     console.log(`Sending Email message to Gemini...`);
-    const chat = ai.chats.create({
-      model: modelName,
-      history: history,
-      config: {
-        tools: [{ functionDeclarations: mcpTools }],
-        systemInstruction: buildSystemPrompt({ channel: 'email', task: 'invoice' })
-      }
+    const { text: finalResponse, history: updatedHistory } = await runGeminiWithTools({
+      chatId: sender,
+      history,
+      message: `Subject: ${subject}\n\n${text}`,
+      systemInstruction: buildSystemPrompt({ channel: 'email', task: 'invoice' }),
     });
 
-    let result = await chat.sendMessage({ message: `Subject: ${subject}\n\n${text}` });
-
-    while (result.functionCalls && result.functionCalls.length > 0) {
-      const functionCall = result.functionCalls[0];
-      console.log(`Gemini (Email) is calling tool: ${functionCall.name}`);
-      try {
-        const mcpResponse = await mcpClient.callTool({ name: functionCall.name, arguments: functionCall.args });
-        let functionResponseData = { result: "Tool executed." };
-        if (mcpResponse.content && mcpResponse.content.length > 0) {
-          try { functionResponseData = JSON.parse(mcpResponse.content[0].text); }
-          catch(e) { functionResponseData = { result: mcpResponse.content[0].text }; }
-        } else if (mcpResponse.isError) {
-          functionResponseData = { error: "The tool returned an error." };
-        }
-        result = await chat.sendMessage({ message: [{ functionResponse: { name: functionCall.name, response: functionResponseData } }] });
-      } catch (error) {
-        result = await chat.sendMessage({ message: [{ functionResponse: { name: functionCall.name, response: { error: error.message } } }] });
-      }
-    }
-
-    const finalResponse = result.text;
-    
-    // Save updated history
-    const updatedHistory = await chat.getHistory();
     emailHistories.set(sender, updatedHistory);
     
     // Reply via Email

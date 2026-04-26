@@ -3,7 +3,7 @@
 
 import { buildPrompt, runSubagent } from './common.js';
 
-export async function draftPost({ userId, brief, platform = 'instagram', ai, modelName }) {
+export async function draftPost({ userId, brief, platform = 'instagram', ai, modelName, styleHint = null }) {
   const prompt = buildPrompt({
     userId,
     role: `You are the Creative — the copywriter of the marketing department.
@@ -22,6 +22,7 @@ Always tailor to the platform conventions:
   "image_brief": "1-2 sentence visual description for an image to pair with this post",
   "rationale": "one sentence on why this will work for THIS user's ICP"
 }`,
+    extra: styleHint ? `BRAND VISUAL STYLE (derived from existing Canva designs — match this):\n${styleHint}` : '',
   });
   const { json } = await runSubagent({ ai, modelName, prompt });
   return json;

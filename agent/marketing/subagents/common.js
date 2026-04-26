@@ -28,11 +28,19 @@ export function buildPrompt({ userId, role, task, schemaHint, extra = '' }) {
   ].filter(Boolean).join('\n');
 }
 
-export async function runSubagent({ ai, modelName, prompt }) {
+// Set grounded=true to attach Google Search grounding for this call. Use only
+// for sub-agents that benefit from real-time external info (Mentor, Director,
+// Analyst). Strategist + Creative deliberately skip it to keep voice grounded
+// in stored memory.
+export async function runSubagent({ ai, modelName, prompt, grounded = false, temperature = 0.7 }) {
+  const config = { temperature };
+  if (grounded) {
+    config.tools = [{ googleSearch: {} }];
+  }
   const result = await ai.models.generateContent({
     model: modelName,
     contents: [{ parts: [{ text: prompt }] }],
-    config: { temperature: 0.7 },
+    config,
   });
   const text = result.text || '';
   return { text, json: extractJson(text) };

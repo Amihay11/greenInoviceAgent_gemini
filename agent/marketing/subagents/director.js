@@ -77,7 +77,8 @@ Prefer drafting and planning over probing. The user said they want Shaul to WORK
     extra: `EXTRA SIGNAL:\ntoday: ${today}\nrecent posts (${posts.length}): ${posts.slice(0, 3).map(p => `#${p.id}/${p.platform}/${p.status}`).join(', ')}\nactive campaigns: ${campaigns.filter(c => c.status === 'active').length}\nattendance entries: ${attendance.length}\nactive goals: ${goals.length}\ninsights pulled (14d): ${insights.length}`,
   });
 
-  const { json } = await runSubagent({ ai, modelName, prompt });
+  // Grounded: Director can spot timing opportunities (holidays, school year etc).
+  const { json } = await runSubagent({ ai, modelName, prompt, grounded: true });
   return json?.actions || [];
 }
 

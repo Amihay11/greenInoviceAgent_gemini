@@ -1,6 +1,6 @@
 # GreenInvoice + Shaul WhatsApp Agent
 
-An AI-powered WhatsApp agent built around **Shaul** — your Israeli business and marketing mentor. Phase 1 connects Shaul to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). **Phase 2 turned Shaul into a full marketing department** with sub-agents (Strategist, Creative, Campaign Manager, Publisher, Analyst, Mentor), Facebook & Instagram publishing, and SQLite long-term memory. **Phase 3 makes Shaul *proactive*** — a marketing employee who leads the agenda, runs dynamic discovery, sends daily briefings, drafts work for your approval, and tracks real outcomes (workshop attendance) alongside Meta metrics. Final publishing is always your decision.
+An AI-powered WhatsApp agent built around **Shaul** — your Israeli business and marketing mentor. Phase 1 connects Shaul to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). **Phase 2 turned Shaul into a full marketing department** with sub-agents (Strategist, Creative, Campaign Manager, Publisher, Analyst, Mentor), Facebook & Instagram publishing, and SQLite long-term memory. **Phase 3 makes Shaul *proactive*** — a marketing employee who leads the agenda, runs dynamic discovery, sends daily briefings, drafts work for your approval, and tracks real outcomes (workshop attendance) alongside Meta metrics. **Phase 4 makes Shaul private, conversational, and connected** — an inbound allow-list, plain-Hebrew commands (no `mk` prefix needed), Google Calendar via MCP, Canva style-matched designs, internet grounding, and proactive WhatsApp DMs to clients (always with your approval). Final publishing and outbound DMs are always your decision.
 
 ---
 
@@ -10,6 +10,7 @@ An AI-powered WhatsApp agent built around **Shaul** — your Israeli business an
 - [Commands](#commands)
 - [Phase 2: Shaul as Marketing Department](#phase-2-shaul-as-marketing-department)
 - [Phase 3: Shaul as Your Marketing Employee](#phase-3-shaul-as-your-marketing-employee)
+- [Phase 4: Private, Connected Shaul](#phase-4-private-connected-shaul)
 - [Architecture](#architecture)
 - [File Structure](#file-structure)
 - [Setup — Windows](#setup--windows)
@@ -280,6 +281,87 @@ After 4-5 turns of natural chat, `business_profile`, `goals`, `entities`, and `a
 ```
 SHAUL_BRIEFING_HOUR=8     # Local hour for the daily proactive briefing. Default 8.
 ```
+
+---
+
+## Phase 4: Private, Connected Shaul
+
+Phase 4 closes three remaining gaps: **privacy** (Shaul should respond only to the owners), **friction** (`mk` commands replaced with plain Hebrew), and **capability** (internet, Calendar, Canva, proactive DMs to clients).
+
+### Inbound allow-list
+
+Set `SHAUL_ALLOWED_NUMBERS` in `agent/.env` to a comma-separated list of phone numbers (any format — `0527203222`, `972527203222`, `+972-52-720-3222` all normalize to the same JID). Messages from anyone outside the list are silently dropped. Empty = accept everyone (default — preserves prior behaviour).
+
+```
+SHAUL_ALLOWED_NUMBERS=0527203222,0546736909
+```
+
+### Plain-Hebrew commands (no `mk` prefix needed)
+
+Just talk to Shaul in Hebrew. Examples:
+
+| Old | New |
+|---|---|
+| `mk plan קמפיין לקיץ` | *תכין לי קמפיין לקיץ* |
+| `mk post מבצע סוף שנה` | *כתוב פוסט אינסטגרם על מבצע סוף שנה* |
+| `mk memory` | *מה אתה זוכר עליי?* |
+| `mk go` | *יאללה* |
+| (new) | *מה יש לי היום ביומן?* |
+| (new) | *תכין לי עיצוב ב-Canva* |
+| (new) | *תכתוב לדנה כהן הודעה שתאשר את הסדנה* |
+| (new) | *תראה לי איך הקמפיין רץ* |
+
+The classifier is biased toward `none` so casual chat keeps flowing through Mentor mode (where Shaul replies as himself, with internet + DM tools available in-context). `mk` commands still work for back-compat — `mk help` lists them all.
+
+### Internet grounding (Google Search)
+
+Mentor, Director, and Analyst now ground in `googleSearch: {}`. Shaul can answer "מתי סוף שנת הלימודים השנה?", spot timing opportunities, and benchmark against industry numbers. Strategist + Creative deliberately skip grounding to keep voice consistent.
+
+### Google Calendar via MCP
+
+Phase 4 uses an external Google Calendar MCP server (e.g. [nspady/google-calendar-mcp](https://github.com/nspady/google-calendar-mcp)) — no calendar code lives in this repo. Spin up any community Calendar MCP that exposes tools like `list_events` / `create_event`, point `CALENDAR_MCP_PATH` at it, and Shaul will gain those tools automatically.
+
+```
+CALENDAR_MCP_PATH=/abs/path/to/google-calendar-mcp/dist/index.js
+GOOGLE_CALENDAR_CREDENTIALS=/abs/path/to/credentials.json   # whatever your MCP needs
+```
+
+Read-only listings (`list_events`) execute freely. Mutations (`create_event` etc.) are logged to the new `calendar_events` audit table — visible in the dashboard memory browser.
+
+### Canva (explore → derive style → design in style)
+
+Canva Connect REST (no public Canva MCP exists). Setup:
+
+1. Create an integration at https://www.canva.com/developers/ — get `client_id` + `client_secret`.
+2. Configure the redirect URI to `http://localhost:5234/canva-callback`.
+3. `cd agent && node scripts/canva-oauth.js` — walks the PKCE dance, prints the refresh token to paste into `.env`.
+
+Once configured, ask Shaul: *"תכין לי עיצוב על מבצע סוף שנה"*. He pulls your existing designs, derives a `canva_style_profile` (cached in `marketing_memory`), drafts a caption + visual brief in that style, and asks for two approvals — one for the design, one for the FB/IG publish.
+
+### Proactive WhatsApp DMs to clients
+
+The Mentor sub-agent now has access to a local `send_whatsapp_message` function tool. Tell Shaul: *"תכתוב לדנה כהן הודעה שתאשר את הסדנה"*. He looks up the phone via the GreenInvoice MCP, drafts a message, and proposes sending it. **Nothing is sent until you reply `אשר`** — the approval gate is enforced in code (a structural `pendingApprovals` Map), not by prompt instructions, so you cannot accidentally bypass it. All sent messages are logged to `outbound_messages`.
+
+### Multi-MCP architecture
+
+`agent/index.js:setupMCP()` now loads multiple MCP servers in parallel, each gated by an env var:
+
+- `MCP_SERVER_PATH` — GreenInvoice (mandatory)
+- `CALENDAR_MCP_PATH` — Google Calendar (optional)
+- `CANVA_MCP_PATH` — Canva (optional, fallback to direct REST)
+- `META_MCP_PATH` — Meta (optional, fallback to direct REST in `meta.js`)
+
+Tools from every connected server collapse into the same Gemini function-call namespace (`toolToClientMap`). One uniform code path — Gemini sees `client.search`, `create_event`, and your local `send_whatsapp_message` side by side.
+
+### New SQL tables
+
+| Table | Purpose |
+|---|---|
+| `calendar_events` | Audit trail of Calendar mutations (start, end, args, response) |
+| `outbound_messages` | Every proactive WhatsApp DM Shaul sent on your behalf |
+| `marketing_memory` | Generic key/value cache (e.g. `canva_style_profile`) |
+
+All three are visible in the dashboard memory browser at `http://localhost:3001/memory`.
 
 ---
 

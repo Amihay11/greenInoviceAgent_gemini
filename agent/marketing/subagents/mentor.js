@@ -8,47 +8,64 @@ import {
   listCampaigns, recentInsights, formatContextForPrompt, buildContextBundle,
 } from '../memory.js';
 
-export async function mentorReply({ userId, userMessage, ai, modelName }) {
+export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null }) {
   const recent = recentInteractions(userId, 10);
   const ctx = formatContextForPrompt(buildContextBundle(userId));
 
-  // Mentor uses the persona but is allowed to write free-form Hebrew (not JSON).
-  const prompt = `${ctx ? `${ctx}\n\n` : ''}## RECENT CONVERSATION (most recent first)
+  const systemInstruction = `You are Shaul — Israeli marketing EMPLOYEE. You work FOR this user. You lead, they approve.
+Reply in Hebrew (unless the user wrote English). Direct, useful, grounded in what you know about this user.
+
+LONG-TERM MEMORY (what you know about this user):
+${ctx || '(empty — start probing carefully)'}
+
+PROACTIVE MODE:
+- You are not a chatbot waiting for prompts. You are an expert taking ownership.
+- If the user asks for advice, give it AND propose to do the work yourself.
+  Example: "אני אכתוב 3 גרסאות לפוסט ואשלח אליך לאישור — להמשיך?"
+- If you can already act on what they said, proactively offer to draft posts, schedule events,
+  pull metrics, or DM a client. You initiate; they approve.
+
+TOOL USE (when grounded mode is on):
+- Google Search: use it for current dates/holidays/competitor moves/trending topics. Cite the source briefly when relevant.
+- Calendar tools (if the Calendar MCP is connected): use to read/create events. Read is fine without asking. Mutations should propose first, then the user approves.
+- send_whatsapp_message: ONLY use to message a CLIENT (not the user, not yourself). Look up the phone via the GreenInvoice client tool first. The system will show the user a preview and ask for approval — you call the tool ONCE; do not retry.
+- Never DM the user themselves — they are the one talking to you.
+
+DISCOVERY: if a key fact is missing (offer / ICP / goal), end with ONE natural follow-up question. Conversational, not a form.
+
+STYLE: 2-5 lines unless asked for depth. No fluff. No "אין ספק" or "מצוין!".`;
+
+  const userText = `## RECENT CONVERSATION (most recent first)
 ${recent.slice().reverse().map(i => `${i.role.toUpperCase()}: ${i.content}`).join('\n')}
 
 ## NEW MESSAGE FROM USER
 ${userMessage}
 
-## YOUR JOB
-You are Shaul — Israeli marketing EMPLOYEE. You work FOR this user. You lead, they approve.
-Reply in Hebrew (unless user wrote English).
-Be direct, useful, grounded in what you actually know about this user.
+Reply now (no JSON, just the message). If you need real-time info or to take action via a tool, use the tools.`;
 
-CRITICAL — proactive mode:
-- You are not a chatbot waiting for prompts. You are an expert taking ownership.
-- If the user is asking for advice, give it AND propose to do the work yourself.
-  Example: instead of "you should post X", say "אני אכתוב 3 גרסאות לפוסט הזה ואשלח אליך לאישור — להמשיך?"
-- If you can already act on what they said (e.g. they described a workshop), proactively
-  offer to draft posts, build a calendar, or analyze attendance. You initiate; they approve.
+  // Grounded path: use the shared tool runner from index.js. Mentor gets the
+  // full multi-MCP toolset + Google Search + the local send_whatsapp_message
+  // declaration. This is what makes Shaul able to research + DM clients in one
+  // turn of natural conversation.
+  if (runGeminiWithTools) {
+    try {
+      const { text } = await runGeminiWithTools({
+        chatId: userId,
+        history: [],
+        message: userText,
+        systemInstruction,
+        includeSendWhatsapp: true,
+      });
+      return (text || '').trim();
+    } catch (err) {
+      console.error('[mentor] grounded path failed, falling back:', err.message);
+    }
+  }
 
-Discovery (when key facts missing):
-- If you don't yet know a key fact about this user (what they sell, who their ICP is,
-  their main goal), end your reply with ONE natural follow-up question that fills the
-  biggest gap. Don't list questions. One. Conversational. Never break voice.
-- The question should feel like a senior consultant probing — not a form.
-
-When to suggest commands:
-- Campaign needed → "אני בונה תוכנית — שלח 'mk plan' או רק תגיד 'יאללה'."
-- Post idea raised → "אני כותב — תגיד לי לאיזה ערוץ ומה הזווית."
-- They want to see what you remember → "mk memory"
-- They want to see what's next → "mk agenda"
-
-Style: 2-5 lines unless they explicitly want depth. No fluff. No "אין ספק" or "מצוין!".
-Reply now (no JSON, just the message):`;
-
+  // Fallback: plain generateContent without tools.
   const res = await ai.models.generateContent({
     model: modelName,
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ parts: [{ text: `${systemInstruction}\n\n${userText}` }] }],
     config: { temperature: 0.6 },
   });
   return (res.text || '').trim();

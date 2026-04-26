@@ -19,6 +19,7 @@ import {
   addInsight, upsertEntity, logAttendance, recentAttendance,
   listAgenda, addAgendaItem, setAgendaStatus,
   buildContextBundle, formatContextForPrompt,
+  logOutboundMessage, recentCalendarEvents, getMemory, setMemory,
 } from './memory.js';
 import * as strategist from './subagents/strategist.js';
 import * as creative from './subagents/creative.js';
@@ -28,6 +29,9 @@ import * as analyst from './subagents/analyst.js';
 import * as mentor from './subagents/mentor.js';
 import * as director from './subagents/director.js';
 import * as meta from './meta.js';
+import * as canva from './canva.js';
+import { lookupClient } from './contacts.js';
+import { buildSystemPrompt } from '../personality/shaul.js';
 
 // In-memory pending approvals: chatId → { kind, payload, expiresAt }
 const pendingApprovals = new Map();
@@ -54,14 +58,27 @@ function takePending(chatId) {
 const APPROVE_RE = /^(אישור|כן|approve|yes|y|1|אשר)$/i;
 const REJECT_RE  = /^(לא|בטל|no|cancel|n|2)$/i;
 
+// Public hooks for index.js — let the WhatsApp router register a pending
+// outbound DM (raised by the local send_whatsapp_message tool) and check whether
+// one exists. The approval gate logic is unified in this module.
+export function registerSendWhatsappPending(chatId, payload) {
+  setPending(chatId, 'send_whatsapp', payload);
+}
+export function hasPendingSendWhatsapp(chatId) {
+  const p = pendingApprovals.get(chatId);
+  return Boolean(p && p.kind === 'send_whatsapp' && Date.now() <= p.expiresAt);
+}
+
 // ── Public entry: handle a marketing-related message ─────────────────────────
 
 const GO_RE = /^(יאללה|קדימה|תעבוד|תתחיל|go|do it|let's go|ok do)$/i;
 
-export async function handleMarketingMessage({ chatId, text, ai, modelName }) {
+export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient }) {
   const userId = chatId;
   ensureProfile(userId);
   logInteraction({ userId, role: 'user', channel: 'whatsapp', content: text });
+
+  const ctx = { chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient };
 
   // 1) If user is in onboarding, route there.
   if (onboardingActive.has(chatId)) {
@@ -72,7 +89,7 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName }) {
   if (pendingApprovals.has(chatId)) {
     if (APPROVE_RE.test(text.trim())) {
       const p = takePending(chatId);
-      return executeApproved(p, { chatId, ai, modelName });
+      return executeApproved(p, ctx);
     }
     if (REJECT_RE.test(text.trim())) {
       takePending(chatId);
@@ -82,20 +99,42 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName }) {
     takePending(chatId);
   }
 
-  // 3) Explicit mk-commands.
+  // 3) Explicit mk-commands (kept for back-compat; not advertised any more).
   const mkMatch = text.trim().match(/^mk\s+(\S+)\s*(.*)$/i);
   if (mkMatch) {
-    return handleMkCommand({ chatId, sub: mkMatch[1].toLowerCase(), arg: mkMatch[2], ai, modelName });
+    return handleMkCommand({ ...ctx, sub: mkMatch[1].toLowerCase(), arg: mkMatch[2] });
   }
 
   // 4) "Go" — execute the top agenda item without further chat.
   if (GO_RE.test(text.trim())) {
-    return executeTopAgenda({ chatId, ai, modelName });
+    return executeTopAgenda(ctx);
   }
 
-  // 5) Free text → Mentor replies in Shaul's voice. Silent extraction runs in
-  //    parallel so profile/goals/attendance update without bothering the user.
-  const replyText = await mentor.mentorReply({ userId, userMessage: text, ai, modelName });
+  // 5) Plain-Hebrew action classifier. Maps phrases like "תכין לי קמפיין",
+  //    "תראה מה יש לי היום", "תכתוב לדנה הודעה" to concrete actions. Biased
+  //    toward "none" so casual chat keeps flowing through the Mentor.
+  try {
+    const action = await classifyMarketingAction({ text, ai, modelName });
+    if (action && action.action && action.action !== 'none') {
+      const dispatched = await dispatchAction({ ...ctx, action: action.action, args: action.args || {} });
+      // dispatched may be null (flow handled reply itself, e.g. dmClientFlow
+      // sends the preview via the local tool). undefined means unknown action
+      // — fall through to the Mentor.
+      if (dispatched !== undefined) return dispatched;
+    }
+  } catch (err) {
+    console.error('[CMO] classifier error:', err.message);
+  }
+
+  // 6) Free text → Mentor replies in Shaul's voice. Mentor has access to
+  //    googleSearch + send_whatsapp_message via runGeminiWithTools.
+  const replyText = await mentor.mentorReply({
+    userId,
+    userMessage: text,
+    ai,
+    modelName,
+    runGeminiWithTools,
+  });
   const finalReply = reply(userId, replyText);
 
   // Fire-and-forget background work: extract structured data + refresh agenda.
@@ -103,6 +142,99 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName }) {
     .catch(err => console.error('[CMO] silent extraction failed:', err.message));
 
   return finalReply;
+}
+
+// ── Natural-Hebrew action classifier ─────────────────────────────────────────
+// Single fast Gemini call. Returns { action, args } or { action: 'none' }.
+// Action vocabulary mirrors handleMkCommand + new Phase-4 actions.
+async function classifyMarketingAction({ text, ai, modelName }) {
+  const prompt = `You classify Hebrew/English WhatsApp messages from the user to their marketing assistant "Shaul". Return ONLY a single JSON object inside a \`\`\`json fence.
+
+VOCABULARY (use exactly these "action" values):
+- none                    : casual chat, advice, questions — DEFAULT. Bias HEAVILY toward this.
+- show_agenda             : user wants to see what Shaul plans to do
+- show_memory             : user asks "what do you remember about me", "מה אתה זוכר"
+- show_calendar           : user wants the content/post calendar (NOT Google Calendar)
+- show_today_schedule     : user asks "what do I have today", "מה יש לי היום", Google-Calendar-style
+- show_campaigns          : user wants the campaigns list
+- plan_campaign           : "תכין לי קמפיין", "build me a campaign for X" → args.goal
+- draft_post_ig           : "כתוב פוסט אינסטגרם", "post about X" → args.brief
+- draft_post_fb           : "כתוב פוסט פייסבוק" → args.brief
+- canva_design            : user explicitly mentions Canva or wants a designed visual → args.brief
+- weekly_report           : "תן לי דוח שבועי" / "report"
+- briefing                : "תדריך", "briefing"
+- discovery               : "תשאל אותי", "discovery"
+- reflect                 : user explicitly asks Shaul to reflect on himself
+- publish_post            : "תפרסם פוסט 42" → args.id
+- cleanup                 : "תנקה את האג'נדה"
+- schedule_followup       : "קבע פגישה", "תזמן פגישה", "schedule meeting" → args.who, args.when, args.what
+- add_calendar_event      : like schedule_followup but generic event → args.title, args.when, args.duration
+- meta_insights           : "תראה לי איך הקמפיין רץ", "how is the campaign performing"
+- dm_client               : user asks Shaul to message a CLIENT (not the user) → args.client_name, args.intent
+
+EXAMPLES:
+- "מה אתה זוכר עליי" → {"action":"show_memory"}
+- "תכין לי קמפיין לקיץ" → {"action":"plan_campaign","args":{"goal":"קיץ"}}
+- "מה יש לי היום ביומן" → {"action":"show_today_schedule"}
+- "מה יש בלוח התוכן" → {"action":"show_calendar"}
+- "תכין עיצוב ב-canva למבצע" → {"action":"canva_design","args":{"brief":"למבצע"}}
+- "שלום מה קורה" → {"action":"none"}
+- "מה דעתך על הקמפיין שלי" → {"action":"none"}
+- "תכתוב לדנה כהן הודעה שתאשר" → {"action":"dm_client","args":{"client_name":"דנה כהן","intent":"שתאשר"}}
+- "what about scheduling a follow-up with David tuesday" → {"action":"schedule_followup","args":{"who":"David","when":"tuesday"}}
+
+Schema: {"action": "<one of the above>", "args": { ... }}
+
+Message: "${text.slice(0, 400)}"
+
+Return ONLY the JSON.`;
+  const res = await ai.models.generateContent({
+    model: modelName,
+    contents: [{ parts: [{ text: prompt }] }],
+    config: { temperature: 0 },
+  });
+  const raw = res.text || '';
+  const fenced = raw.match(/```json\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : raw;
+  try {
+    const parsed = JSON.parse(body.trim());
+    if (parsed && typeof parsed.action === 'string') return parsed;
+  } catch (_) {
+    const m = body.match(/\{[\s\S]*\}/);
+    if (m) {
+      try { return JSON.parse(m[0]); } catch (_) {}
+    }
+  }
+  return { action: 'none' };
+}
+
+// Map a classifier action to the right flow. Re-uses handleMkCommand for the
+// existing actions and dispatches new flows for Phase-4 actions.
+async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, action, args }) {
+  const userId = chatId;
+  switch (action) {
+    case 'go':                  return executeTopAgenda({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient });
+    case 'show_agenda':         return showAgenda({ userId, ai, modelName });
+    case 'show_memory':         return showMemory({ userId });
+    case 'show_calendar':       return showCalendar({ userId });
+    case 'show_today_schedule': return showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools });
+    case 'show_campaigns':      return showCampaigns({ userId });
+    case 'plan_campaign':       return planFlow({ chatId, goal: args.goal || '', ai, modelName });
+    case 'draft_post_ig':       return postFlow({ chatId, brief: args.brief || '', platform: 'instagram', ai, modelName });
+    case 'draft_post_fb':       return postFlow({ chatId, brief: args.brief || '', platform: 'facebook', ai, modelName });
+    case 'canva_design':        return canvaFlow({ chatId, brief: args.brief || '', ai, modelName });
+    case 'weekly_report':       return reportFlow({ userId, ai, modelName });
+    case 'briefing':            return briefingFlow({ chatId, ai, modelName });
+    case 'discovery':           return discoveryFlow({ chatId, ai, modelName });
+    case 'reflect':             return reflectFlow({ userId, ai, modelName });
+    case 'publish_post':        return publishCommand({ userId, arg: String(args.id || '') });
+    case 'cleanup':             return cleanupCommand({ userId, ai, modelName });
+    case 'schedule_followup':   return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'schedule_followup', args });
+    case 'add_calendar_event':  return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'add_event', args });
+    case 'meta_insights':       return metaInsightsFlow({ chatId, ai, modelName, args });
+    case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args });
+    default:                    return undefined; // unknown — caller falls back to mentor
+  }
 }
 
 // Silent extraction — every free-text turn, the Strategist mines structured
@@ -165,7 +297,7 @@ function maybeMarkOnboardingDone(userId) {
 
 // ── mk subcommands ───────────────────────────────────────────────────────────
 
-async function handleMkCommand({ chatId, sub, arg, ai, modelName }) {
+async function handleMkCommand({ chatId, sub, arg, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient }) {
   const userId = chatId;
   switch (sub) {
     case 'onboard':    return startOnboarding({ chatId });
@@ -174,8 +306,11 @@ async function handleMkCommand({ chatId, sub, arg, ai, modelName }) {
     case 'post':       return postFlow({ chatId, brief: arg, platform: 'instagram', ai, modelName });
     case 'fb':         return postFlow({ chatId, brief: arg, platform: 'facebook', ai, modelName });
     case 'ig':         return postFlow({ chatId, brief: arg, platform: 'instagram', ai, modelName });
+    case 'canva':      return canvaFlow({ chatId, brief: arg, ai, modelName });
     case 'schedule':   return showSchedule({ userId });
     case 'calendar':   return showCalendar({ userId });
+    case 'today':      return showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools });
+    case 'meet':       return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'schedule_followup', args: { raw: arg } });
     case 'report':     return reportFlow({ userId, ai, modelName });
     case 'memory':     return showMemory({ userId });
     case 'reflect':    return reflectFlow({ userId, ai, modelName });
@@ -187,6 +322,7 @@ async function handleMkCommand({ chatId, sub, arg, ai, modelName }) {
     case 'skip':       return skipTopAgenda({ userId, arg });
     case 'publish':    return publishCommand({ userId, arg });
     case 'cleanup':    return cleanupCommand({ userId, ai, modelName });
+    case 'dm':         return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args: { client_name: arg } });
     case 'help':       return reply(userId, MK_HELP);
     default:           return reply(userId, `לא מכיר את ${sub}. נסה: ${MK_HELP}`);
   }
@@ -487,11 +623,330 @@ ${d.image_brief || '—'}
 💡 _${d.rationale || ''}_`;
 }
 
+// ── Phase 4 flows ────────────────────────────────────────────────────────────
+
+// "What's on my Google Calendar today?" — read-only, no approval needed.
+async function showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools }) {
+  const userId = chatId;
+  if (!runGeminiWithTools) {
+    return reply(userId, '⚠️ Calendar לא מוגדר. צריך CALENDAR_MCP_PATH ב-.env.');
+  }
+  await reply(userId, '📅 מושך מ-Google Calendar...');
+  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general' })}
+
+Task: read the user's Google Calendar for the next 24 hours and present it in Hebrew.
+Use the Calendar MCP tools (e.g. list_events / get_events) to fetch events. Format:
+- One header line in Hebrew
+- Bulleted list: time + title + duration
+- If empty, say so plainly. No filler.`;
+  try {
+    const { text } = await runGeminiWithTools({
+      chatId,
+      history: [],
+      message: 'מה יש ביומן שלי ל-24 השעות הקרובות? תחזיר רשימה קצרה.',
+      systemInstruction: sys,
+    });
+    return reply(userId, text || 'לא הצלחתי למשוך מהיומן.');
+  } catch (e) {
+    return reply(userId, `❌ שגיאה ביומן: ${e.message}`);
+  }
+}
+
+// schedule_followup / add_calendar_event — Gemini composes a create_event call,
+// returns its proposal as text, and we ask the user to approve.
+async function calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind, args }) {
+  const userId = chatId;
+  if (!runGeminiWithTools) {
+    return reply(userId, '⚠️ Calendar לא מוגדר. צריך CALENDAR_MCP_PATH ב-.env.');
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const argsHint = JSON.stringify(args || {});
+  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general' })}
+
+Task: propose a Google Calendar event. TODAY is ${today}.
+- Use the Calendar MCP create_event tool to actually create the event.
+- BEFORE calling create_event, double-check the date is on or after today.
+- After creating, reply in Hebrew with: "📅 קבעתי: <title> ב-<time> ל-<duration>" and the event link if available.
+- If you don't have enough info (e.g. missing time), ask ONE clarifying question instead of guessing. Don't create an event with a placeholder date.`;
+  const userMessage = `Args from classifier: ${argsHint}. Kind: ${kind}. Compose and create the event.`;
+  try {
+    const { text } = await runGeminiWithTools({
+      chatId,
+      history: [],
+      message: userMessage,
+      systemInstruction: sys,
+    });
+    return reply(userId, text || 'לא הצלחתי לקבוע את האירוע.');
+  } catch (e) {
+    return reply(userId, `❌ שגיאה ביומן: ${e.message}`);
+  }
+}
+
+// dm_client — look up the client, draft the message, ask for approval BEFORE
+// sending. The local send_whatsapp_message tool is also available so the agent
+// can drive this end-to-end in one Gemini turn.
+async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args }) {
+  const userId = chatId;
+  if (!runGeminiWithTools) {
+    return reply(userId, '⚠️ הסביבה לא מוכנה לשליחת הודעות.');
+  }
+  const clientName = (args.client_name || '').trim();
+  if (!clientName) {
+    return reply(userId, 'תכתוב למי לשלוח. למשל: "תכתוב לדנה כהן הודעה שתאשר את הסדנה".');
+  }
+  await reply(userId, `🔍 מחפש את ${clientName} בלקוחות...`);
+  const mcp = getGreenInvoiceClient && getGreenInvoiceClient();
+  let candidates = [];
+  if (mcp) {
+    try { candidates = await lookupClient({ name: clientName, mcpClient: mcp }); }
+    catch (e) { console.error('[CMO] lookupClient:', e.message); }
+  }
+  if (candidates.length === 0) {
+    return reply(userId, `לא מצאתי את ${clientName} ב-GreenInvoice. תוודא את השם או שלח את המספר ישירות.`);
+  }
+  if (candidates.length > 1) {
+    const lines = ['🔎 מצאתי כמה תוצאות, איזה הוא הנכון?'];
+    candidates.slice(0, 5).forEach((c, i) => {
+      lines.push(`${i + 1}. ${c.name}${c.phone ? ` — ${c.phone}` : ''}`);
+    });
+    lines.push('\nשלח את השם המלא או המספר.');
+    return reply(userId, lines.join('\n'));
+  }
+  const c = candidates[0];
+  if (!c.jid) {
+    return reply(userId, `מצאתי את ${c.name} אבל אין לו טלפון תקין במערכת.`);
+  }
+  const intent = args.intent || 'הודעת המשך';
+  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general' })}
+
+Task: draft and propose sending a WhatsApp message to a CLIENT (not the user).
+- Client: ${c.name} (phone ${c.phone}).
+- Purpose: ${intent}.
+- Voice: friendly, short (2-4 lines), natural Hebrew, signed informally.
+- Then call send_whatsapp_message with phone="${c.phone}", target_label="${c.name}", and your drafted message.
+- The system will show the user a preview and ask for approval — DO NOT call send_whatsapp_message twice.`;
+  try {
+    const { text } = await runGeminiWithTools({
+      chatId,
+      history: [],
+      message: `שלח ל${c.name}: ${intent}`,
+      systemInstruction: sys,
+      includeSendWhatsapp: true,
+    });
+    if (text) return reply(userId, text);
+    return null; // preview already sent by the local tool handler
+  } catch (e) {
+    return reply(userId, `❌ שגיאה: ${e.message}`);
+  }
+}
+
+// canva_design — explore existing designs, derive style profile (cached), then
+// draft a new design + caption matching the style, ask for two-step approval.
+async function canvaFlow({ chatId, brief, ai, modelName }) {
+  const userId = chatId;
+  if (!brief || brief.trim().length < 3) {
+    return reply(userId, 'תכתוב על מה העיצוב. למשל: "תכין עיצוב על מבצע סוף שנה".');
+  }
+  if (!canva.isConfigured()) {
+    return reply(userId, '⚠️ Canva לא מוגדר. הרץ "node agent/scripts/canva-oauth.js" כדי לחבר.');
+  }
+  await reply(userId, '🎨 מסתכל על העיצובים שלך ב-Canva...');
+
+  // 1. Style profile — cached so we don't re-derive on every call.
+  let styleProfile = getMemory(userId, 'canva_style_profile');
+  if (!styleProfile) {
+    try {
+      const designs = await canva.listDesigns({ limit: 8 });
+      styleProfile = await deriveStyleProfile({ userId, designs, ai, modelName });
+      if (styleProfile) setMemory(userId, 'canva_style_profile', styleProfile);
+    } catch (e) {
+      console.error('[Canva] style derivation failed:', e.message);
+    }
+  }
+
+  // 2. Creative drafts caption + visual brief grounded in style.
+  const draft = await creative.draftPost({
+    userId, brief, platform: 'instagram', ai, modelName,
+    styleHint: styleProfile?.summary || null,
+  });
+  if (!draft) return reply(userId, 'לא הצלחתי לכתוב טיוטה.');
+
+  // 3. First approval — caption + visual brief preview. After approval we'll
+  //    create + export the Canva design, then ask for the second approval to
+  //    publish to FB/IG.
+  setPending(chatId, 'canva_create', { draft, styleProfile });
+  return reply(userId, `🎨 *טיוטת עיצוב Canva:*
+
+*כותרת:* ${draft.headline || '—'}
+*טקסט:* ${draft.body || '—'}
+*וויזואל:* ${draft.image_brief || '—'}
+${styleProfile?.summary ? `\n_סגנון: ${styleProfile.summary.slice(0, 140)}_` : ''}
+
+_שלח *אשר* כדי שאצור את העיצוב ב-Canva, או *בטל* כדי לעצור._`);
+}
+
+async function deriveStyleProfile({ userId, designs, ai, modelName }) {
+  if (!Array.isArray(designs) || designs.length === 0) return null;
+  const sample = designs.slice(0, 8).map(d => ({
+    title: d.title || d.name || null,
+    type: d.design_type || d.type || null,
+    thumbnail: d.thumbnail_url || d.thumbnail?.url || null,
+  }));
+  const prompt = `You are deriving the user's visual brand style from their existing Canva designs.
+
+Existing designs (titles + types):
+${JSON.stringify(sample, null, 2)}
+
+Return ONLY this JSON inside a \`\`\`json fence:
+{
+  "summary": "1-sentence Hebrew description of the user's typical visual style",
+  "color_palette": "comma-separated description (or null)",
+  "typography": "1-line description (or null)",
+  "tone": "1-line — playful / clinical / bold / minimalist etc",
+  "preferred_design_types": ["..."]
+}`;
+  try {
+    const res = await ai.models.generateContent({
+      model: modelName,
+      contents: [{ parts: [{ text: prompt }] }],
+      config: { temperature: 0.3 },
+    });
+    const raw = res.text || '';
+    const fenced = raw.match(/```json\s*([\s\S]*?)```/i);
+    return JSON.parse((fenced ? fenced[1] : raw).trim());
+  } catch (e) {
+    console.error('[Canva] style profile JSON parse failed:', e.message);
+    return null;
+  }
+}
+
+// meta_insights — pull latest Page+IG metrics and let the Analyst propose a
+// refined plan (presented as draft for approval, then queued by Director on go).
+async function metaInsightsFlow({ chatId, ai, modelName, args }) {
+  const userId = chatId;
+  if (!meta.isConfigured()) {
+    return reply(userId, '⚠️ Meta API לא מוגדר. הוסף META_PAGE_TOKEN ו-IG_BUSINESS_ID ל-.env.');
+  }
+  await reply(userId, '📊 מושך נתוני Meta...');
+  let metricsBundle = null;
+  try {
+    const [page, ig, pagePosts, igMedia] = await Promise.allSettled([
+      meta.pageInsights({}),
+      meta.instagramInsights({}),
+      meta.recentPagePosts(10),
+      meta.recentInstagramMedia(10),
+    ]);
+    metricsBundle = {
+      page:  page.status === 'fulfilled'      ? page.value      : null,
+      ig:    ig.status === 'fulfilled'        ? ig.value        : null,
+      pagePosts: pagePosts.status === 'fulfilled' ? pagePosts.value : null,
+      igMedia: igMedia.status === 'fulfilled' ? igMedia.value : null,
+    };
+  } catch (e) {
+    console.error('[meta_insights]', e.message);
+  }
+  const refined = await analyst.refineCampaign({ userId, ai, modelName, metricsBundle, hint: args || {} });
+  if (!refined) return reply(userId, 'אין מספיק נתונים לחידוד.');
+  setPending(chatId, 'apply_refined_plan', { refined });
+  const lines = [
+    '📊 *תקציר מטריקות + הצעות לחידוד:*',
+    '',
+    `*כותרת:* ${refined.headline || '—'}`,
+    '',
+    '*טופ:* ' + (refined.top_performer || '—'),
+    '*תחתית:* ' + (refined.bottom_performer || '—'),
+    '',
+    '*המלצות:*',
+    ...(refined.recommendations || []).slice(0, 5).map(r => `  • ${r}`),
+    '',
+    '_שלח *אשר* כדי שאקפיץ את ההצעות לאג׳נדה, או *בטל*._',
+  ];
+  return reply(userId, lines.join('\n'));
+}
+
 // ── Approval execution ───────────────────────────────────────────────────────
 
-async function executeApproved(pending, { chatId, ai, modelName }) {
+async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient }) {
   const userId = chatId;
   const { kind, payload } = pending;
+
+  // Phase 4: outbound DM. The user previewed it via the local
+  // send_whatsapp_message tool; now actually send it.
+  if (kind === 'send_whatsapp') {
+    const { jid, message: bodyText, targetLabel } = payload;
+    if (!waClient) {
+      return reply(userId, '⚠️ אין חיבור WhatsApp פעיל.');
+    }
+    try {
+      await waClient.sendMessage(jid, bodyText);
+      logOutboundMessage({ userId, targetJid: jid, targetLabel, body: bodyText, status: 'sent' });
+      return reply(userId, `🚀 נשלח ל${targetLabel || jid}.`);
+    } catch (e) {
+      logOutboundMessage({ userId, targetJid: jid, targetLabel, body: bodyText, status: 'failed', errorMessage: e.message });
+      return reply(userId, `❌ שליחה נכשלה: ${e.message}`);
+    }
+  }
+
+  // Phase 4: Canva — first approval. Create the design + export, then ask for
+  // the second approval to publish.
+  if (kind === 'canva_create') {
+    const { draft, styleProfile } = payload;
+    await reply(userId, '🎨 יוצר ב-Canva...');
+    let exportResult;
+    try {
+      const design = await canva.createDesign({
+        title: draft.headline || (draft.body || 'Shaul design').slice(0, 40),
+        styleProfile,
+      });
+      exportResult = await canva.exportDesign(design.id);
+    } catch (e) {
+      return reply(userId, `❌ Canva נכשל: ${e.message}`);
+    }
+    const imageUrl = exportResult?.urls?.[0] || exportResult?.url || null;
+    if (!imageUrl) {
+      return reply(userId, '⚠️ Canva לא החזיר תמונה. נסה שוב.');
+    }
+    setPending(chatId, 'canva_publish', { draft, imageUrl });
+    return reply(userId, `✅ העיצוב מוכן.\n${imageUrl}\n\nלפרסם לאינסטגרם? *אשר* / *בטל*.`);
+  }
+
+  if (kind === 'canva_publish') {
+    const { draft, imageUrl } = payload;
+    const caption = `${draft.headline ? draft.headline + '\n\n' : ''}${draft.body || ''}\n\n${draft.hashtags || ''}`.trim();
+    const creativeId = createCreative({
+      userId, kind: 'post', headline: draft.headline, body: draft.body,
+      hashtags: draft.hashtags, image_brief: draft.image_brief, image_url: imageUrl,
+      status: 'approved',
+    });
+    const postId = createPost({ userId, creativeId, platform: 'instagram', caption, image_url: imageUrl, status: 'approved' });
+    if (!meta.isConfigured()) {
+      setPostStatus(postId, 'pending_approval');
+      return reply(userId, `💾 הפוסט נשמר (#${postId}) אבל Meta API לא מוגדר.`);
+    }
+    try {
+      const res = await publisher.publishPost(postId);
+      return reply(userId, `🚀 פורסם!\n${res.permalink || ''}`);
+    } catch (e) {
+      return reply(userId, `❌ פרסום נכשל: ${e.message}`);
+    }
+  }
+
+  // Phase 4: refined plan from Meta insights → push recommendations into agenda.
+  if (kind === 'apply_refined_plan') {
+    const { refined } = payload;
+    let added = 0;
+    for (const rec of (refined.recommendations || []).slice(0, 5)) {
+      addAgendaItem({
+        userId,
+        title: typeof rec === 'string' ? rec.slice(0, 60) : (rec.title || 'refinement').slice(0, 60),
+        detail: typeof rec === 'string' ? null : (rec.detail || null),
+        kind: 'draft_post',
+        priority: 3,
+      });
+      added++;
+    }
+    return reply(userId, `✅ הוספתי ${added} פריטים לאג'נדה. שלח "יאללה" כדי שאתחיל מהראשון.`);
+  }
 
   if (kind === 'save_campaign') {
     const { plan } = payload;
@@ -620,33 +1075,41 @@ function reply(userId, text) {
 
 const MK_HELP = `📣 *שאול — מחלקת השיווק שלך*
 
-🎯 *מה אני יכול לעשות בשבילך עכשיו:*
+_💡 הכי קל: פשוט תכתוב לי מה אתה צריך בעברית. הפקודות mk עובדות לאחור-תאימות._
+
+🎯 *פעולה:*
   mk go               — אני מתחיל מהדבר הכי חשוב באג'נדה
   mk agenda           — לראות מה אני מתכוון לעשות
   mk briefing         — תדריך עכשווי
 
-🧠 *לימוד עליך:*
-  mk discovery        — אני שואל את השאלה הבאה הכי חשובה
-  mk onboard          — ראיון מלא (אם אתה מעדיף פורמט)
-  mk memory           — מה אני זוכר עליך
-
 🛠 *עבודת שיווק:*
   mk plan <מטרה>      — בונה תוכנית קמפיין
-  mk post <רעיון>     — מנסח פוסט לאינסטגרם
-  mk fb <רעיון>       — מנסח פוסט לפייסבוק
+  mk post <רעיון>     — פוסט אינסטגרם
+  mk fb <רעיון>       — פוסט פייסבוק
+  mk canva <רעיון>    — עיצוב Canva בסגנון שלך
   mk calendar         — לוח תוכן 14 יום
   mk schedule         — פוסטים בתור
   mk campaigns        — הקמפיינים שלך
 
+📅 *יומן (Google Calendar):*
+  mk today            — מה יש לי היום
+  mk meet <תיאור>     — קבע פגישה / איוון
+
+💬 *שליחה ללקוחות:*
+  mk dm <שם לקוח>     — מאתר טלפון, ננסח, אישור לפני שליחה
+
 📊 *מדידה:*
   mk attendance "תווית" 12  — רושם נוכחות בסדנה
-  mk report           — דוח שבועי (שיווק + נוכחות)
+  mk report           — דוח שבועי (שיווק + נוכחות + Meta insights)
   mk reflect          — אני מסיק מסקנות עלייך
 
-🧹 *תחזוקה:*
-  mk cleanup          — מנקה אג'נדה ישנה ומרענן
+🧠 *לימוד עליך:*
+  mk discovery        — שאלה הבאה הכי חשובה
+  mk onboard          — ראיון מלא
+  mk memory           — מה אני זוכר עליך
 
-_כדי שאעשה משהו: כתוב לי מה אתה צריך, או פשוט "יאללה"._`;
+🧹 *תחזוקה:*
+  mk cleanup          — מנקה אג'נדה ישנה ומרענן`;
 
 // Export for the WhatsApp scheduler — index.js calls this once a day.
 // Returns [{ userId, text }] to send. CMO doesn't have a WhatsApp client

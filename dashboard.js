@@ -25,6 +25,7 @@ const VIEWABLE_TABLES = [
   'business_profile', 'interactions', 'learned_insights', 'entities',
   'campaigns', 'creatives', 'posts', 'insights_daily', 'goals', 'reflections',
   'agenda_items', 'attendance', 'discovery_state', 'daily_briefings',
+  'calendar_events', 'outbound_messages', 'marketing_memory',
 ];
 
 // Probe multiple known paths — the agent and the dashboard occasionally end up

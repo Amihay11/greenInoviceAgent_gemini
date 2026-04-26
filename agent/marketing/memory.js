@@ -225,6 +225,43 @@ function initSchema(db) {
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(user_id, day)
     );
+
+    -- Phase 4: audit trail of Calendar events Shaul created via the Calendar MCP.
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id         TEXT NOT NULL,
+      gcal_event_id   TEXT,
+      summary         TEXT,
+      start_at        TEXT,
+      end_at          TEXT,
+      tool_name       TEXT,
+      raw_args        TEXT,
+      raw_response    TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_calendar_user_time ON calendar_events(user_id, start_at DESC);
+
+    -- Phase 4: every proactive WhatsApp DM Shaul sent on the user's behalf.
+    CREATE TABLE IF NOT EXISTS outbound_messages (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id       TEXT NOT NULL,
+      target_jid    TEXT NOT NULL,
+      target_label  TEXT,
+      body          TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'sent',
+      error_message TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_outbound_user_time ON outbound_messages(user_id, created_at DESC);
+
+    -- Phase 4: generic key/value cache (e.g. canva_style_profile, derived facts).
+    CREATE TABLE IF NOT EXISTS marketing_memory (
+      user_id     TEXT NOT NULL,
+      key         TEXT NOT NULL,
+      value       TEXT,
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, key)
+    );
   `);
 }
 
@@ -548,12 +585,66 @@ export function listAllUserIds() {
   `).all().map(r => r.user_id);
 }
 
+// ── calendar_events (audit) ──────────────────────────────────────────────────
+
+export function logCalendarEvent({ userId, gcalEventId = null, summary = null, startAt = null, endAt = null, toolName = null, rawArgs = null, rawResponse = null }) {
+  const info = getDb().prepare(`
+    INSERT INTO calendar_events (user_id, gcal_event_id, summary, start_at, end_at, tool_name, raw_args, raw_response)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    userId,
+    gcalEventId,
+    summary,
+    startAt,
+    endAt,
+    toolName,
+    rawArgs ? JSON.stringify(rawArgs) : null,
+    rawResponse ? JSON.stringify(rawResponse).slice(0, 4000) : null,
+  );
+  return info.lastInsertRowid;
+}
+
+export function recentCalendarEvents(userId, limit = 20) {
+  return getDb().prepare(`
+    SELECT * FROM calendar_events WHERE user_id = ?
+    ORDER BY COALESCE(start_at, created_at) DESC LIMIT ?
+  `).all(userId, limit);
+}
+
+// ── outbound_messages (audit of proactive DMs) ────────────────────────────────
+
+export function logOutboundMessage({ userId, targetJid, targetLabel = null, body, status = 'sent', errorMessage = null }) {
+  const info = getDb().prepare(`
+    INSERT INTO outbound_messages (user_id, target_jid, target_label, body, status, error_message)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(userId, targetJid, targetLabel, body, status, errorMessage);
+  return info.lastInsertRowid;
+}
+
+// ── marketing_memory (generic key/value) ─────────────────────────────────────
+
+export function getMemory(userId, key) {
+  const row = getDb().prepare('SELECT value FROM marketing_memory WHERE user_id = ? AND key = ?').get(userId, key);
+  if (!row?.value) return null;
+  try { return JSON.parse(row.value); } catch (_) { return row.value; }
+}
+
+export function setMemory(userId, key, value) {
+  const v = typeof value === 'string' ? value : JSON.stringify(value);
+  getDb().prepare(`
+    INSERT INTO marketing_memory (user_id, key, value, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+  `).run(userId, key, v);
+}
+
 // ── dashboard helpers ─────────────────────────────────────────────────────────
 
 const VIEWABLE_TABLES = [
   'business_profile', 'interactions', 'learned_insights', 'entities',
   'campaigns', 'creatives', 'posts', 'insights_daily', 'goals', 'reflections',
   'agenda_items', 'attendance', 'discovery_state', 'daily_briefings',
+  'calendar_events', 'outbound_messages', 'marketing_memory',
 ];
 
 export function listTables() {
