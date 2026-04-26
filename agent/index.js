@@ -25,7 +25,7 @@ import {
   INTENT_LABELS,
   HELP_TEXT,
 } from './personality/shaul.js';
-import { handleMarketingMessage, processScheduledPosts } from './marketing/cmo.js';
+import { handleMarketingMessage, processScheduledPosts, getDailyBriefingsToSend } from './marketing/cmo.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -146,13 +146,17 @@ async function classifyIntent(text, ai, modelName) {
 
 Categories:
 - invoice: GreenInvoice tasks — creating invoices, receipts, tax documents, listing clients or documents
-- marketing: anything about Facebook/Instagram, ads, posts, campaigns, audience, brand, content, marketing strategy, asking Shaul for marketing advice
+- marketing: ANY conversation about the user's business, products, services, customers (ICP),
+  goals, competitors, brand, content, posts, ads, campaigns, social channels, marketing
+  strategy, workshop attendance ("היו 12 ילדים"), OR asking Shaul for marketing/business
+  advice. If the message is ABOUT THEIR BUSINESS or strategy, this is marketing.
 - note_remind: setting a reminder for a specific future time
 - note_search: searching through saved notes or ideas
 - note_summary_day: summarizing today's saved notes
 - note_summary_week: summarizing this week's saved notes
 - note_chat: asking a question about or discussing saved notes
-- note_save: saving a new idea, thought, or memo
+- note_save: a personal memo UNRELATED to the business — a fleeting thought, a TODO, a
+  link to remember later. Do NOT use this for statements about the business itself.
 - general: any other question, request, or conversation
 
 Message: "${text.slice(0, 400)}"` }] }]
@@ -396,9 +400,17 @@ client.on('message', async msg => {
     return;
   }
 
-  // Classify intent → show confirmation menu
+  // Classify intent. Conversational intents (general / marketing) route
+  // directly to Shaul's CMO/Mentor with memory — no menu friction. The menu
+  // only fires for high-stakes intents (invoice, note actions) where a wrong
+  // classification would cause real damage.
   let intent = 'general';
   try { intent = await classifyIntent(msgText, ai, modelName); } catch (_) {}
+
+  if (intent === 'general' || intent === 'marketing') {
+    await handleMkRouted(msg, msgText, ai, modelName, client);
+    return;
+  }
 
   const { options, menuText } = buildConfirmMenu(intent);
   pendingIntentConfirm.set(msg.from, { options, originalMsg: msg, msgText });
@@ -410,9 +422,36 @@ client.on('ready', () => {
   armAllReminders(client);
   setInterval(() => checkReminders(client), 30 * 1000);
 
-  // Marketing: publish any due scheduled FB/IG posts every minute.
-  setInterval(() => {
-    processScheduledPosts().catch(err => console.error('Scheduled-posts loop error:', err.message));
+  // Marketing: scheduled posts NEVER auto-publish. When a post hits its time,
+  // we send the user a re-confirm nudge — final publishing requires explicit
+  // "mk publish <id>" from the user. Phase 3 rule.
+  setInterval(async () => {
+    try {
+      const nudges = await processScheduledPosts();
+      for (const n of (nudges || [])) {
+        try { await client.sendMessage(n.userId, n.text); }
+        catch (e) { console.error(`Nudge send failed for ${n.userId}:`, e.message); }
+      }
+    } catch (err) {
+      console.error('Scheduled-posts loop error:', err.message);
+    }
+  }, 60 * 1000);
+
+  // Phase 3: proactive daily briefing — fire once when local hour first hits 8 each day.
+  // Runs every minute but the Director's logBriefing() de-dupes per day.
+  const BRIEFING_HOUR = parseInt(process.env.SHAUL_BRIEFING_HOUR || '8', 10);
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      if (now.getHours() !== BRIEFING_HOUR) return;
+      const briefings = await getDailyBriefingsToSend({ ai, modelName });
+      for (const b of briefings) {
+        try { await client.sendMessage(b.userId, b.text); }
+        catch (e) { console.error(`Briefing send failed for ${b.userId}:`, e.message); }
+      }
+    } catch (err) {
+      console.error('Daily-briefing loop error:', err.message);
+    }
   }, 60 * 1000);
 
   if (process.env.WHATSAPP_PHONE) {

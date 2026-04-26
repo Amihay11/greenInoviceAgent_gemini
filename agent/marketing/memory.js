@@ -179,6 +179,52 @@ function initSchema(db) {
       next_moves  TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- Phase 3: agenda items (Shaul's todo list FOR the user)
+    CREATE TABLE IF NOT EXISTS agenda_items (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      detail      TEXT,
+      kind        TEXT,
+      priority    INTEGER NOT NULL DEFAULT 5,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      due_at      TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_agenda_user_status ON agenda_items(user_id, status, priority);
+
+    -- Phase 3: workshop attendance — KPIs that aren't on Meta
+    CREATE TABLE IF NOT EXISTS attendance (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     TEXT NOT NULL,
+      session_label TEXT NOT NULL,
+      session_date TEXT,
+      headcount   INTEGER NOT NULL,
+      revenue     REAL,
+      notes       TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_user_date ON attendance(user_id, session_date DESC);
+
+    -- Phase 3: dynamic discovery — track which hypotheses Shaul has confirmed
+    CREATE TABLE IF NOT EXISTS discovery_state (
+      user_id      TEXT PRIMARY KEY,
+      hypotheses   TEXT,
+      last_question TEXT,
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Phase 3: daily briefing log (so we don't double-send)
+    CREATE TABLE IF NOT EXISTS daily_briefings (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     TEXT NOT NULL,
+      day         TEXT NOT NULL,
+      summary     TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(user_id, day)
+    );
   `);
 }
 
@@ -412,11 +458,102 @@ export function recentReflections(userId, limit = 5) {
   `).all(userId, limit);
 }
 
+// ── agenda_items (Shaul's todo list FOR the user) ─────────────────────────────
+
+export function addAgendaItem({ userId, title, detail = null, kind = null, priority = 5, due_at = null }) {
+  const info = getDb().prepare(`
+    INSERT INTO agenda_items (user_id, title, detail, kind, priority, due_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(userId, title, detail, kind, priority, due_at);
+  return info.lastInsertRowid;
+}
+
+export function listAgenda(userId, status = 'pending', limit = 20) {
+  return getDb().prepare(`
+    SELECT * FROM agenda_items WHERE user_id = ? AND status = ?
+    ORDER BY priority ASC, COALESCE(due_at, '9999-12-31'), created_at LIMIT ?
+  `).all(userId, status, limit);
+}
+
+export function setAgendaStatus(id, status) {
+  getDb().prepare(`UPDATE agenda_items SET status = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(status, id);
+}
+
+export function clearStaleAgenda(userId, olderThanDays = 14) {
+  getDb().prepare(`
+    DELETE FROM agenda_items WHERE user_id = ? AND status = 'pending'
+    AND created_at < datetime('now', ?)
+  `).run(userId, `-${olderThanDays} days`);
+}
+
+// ── attendance ───────────────────────────────────────────────────────────────
+
+export function logAttendance({ userId, session_label, session_date = null, headcount, revenue = null, notes = null }) {
+  const info = getDb().prepare(`
+    INSERT INTO attendance (user_id, session_label, session_date, headcount, revenue, notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(userId, session_label, session_date, headcount, revenue, notes);
+  return info.lastInsertRowid;
+}
+
+export function recentAttendance(userId, limit = 20) {
+  return getDb().prepare(`
+    SELECT * FROM attendance WHERE user_id = ?
+    ORDER BY COALESCE(session_date, created_at) DESC LIMIT ?
+  `).all(userId, limit);
+}
+
+// ── discovery_state ──────────────────────────────────────────────────────────
+
+export function getDiscoveryState(userId) {
+  const row = getDb().prepare('SELECT * FROM discovery_state WHERE user_id = ?').get(userId);
+  if (!row) return { user_id: userId, hypotheses: {}, last_question: null };
+  return { ...row, hypotheses: row.hypotheses ? JSON.parse(row.hypotheses) : {} };
+}
+
+export function updateDiscoveryState(userId, { hypotheses, last_question }) {
+  const cur = getDiscoveryState(userId);
+  const merged = { ...cur.hypotheses, ...(hypotheses || {}) };
+  getDb().prepare(`
+    INSERT INTO discovery_state (user_id, hypotheses, last_question, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(user_id) DO UPDATE SET
+      hypotheses = excluded.hypotheses,
+      last_question = excluded.last_question,
+      updated_at = datetime('now')
+  `).run(userId, JSON.stringify(merged), last_question || cur.last_question || null);
+}
+
+// ── daily_briefings ─────────────────────────────────────────────────────────
+
+export function alreadyBriefedToday(userId) {
+  const day = new Date().toISOString().slice(0, 10);
+  const row = getDb().prepare('SELECT id FROM daily_briefings WHERE user_id = ? AND day = ?').get(userId, day);
+  return Boolean(row);
+}
+
+export function logBriefing({ userId, summary }) {
+  const day = new Date().toISOString().slice(0, 10);
+  getDb().prepare(`
+    INSERT INTO daily_briefings (user_id, day, summary) VALUES (?, ?, ?)
+    ON CONFLICT(user_id, day) DO UPDATE SET summary = excluded.summary
+  `).run(userId, day, summary);
+}
+
+export function listAllUserIds() {
+  return getDb().prepare(`
+    SELECT user_id FROM business_profile
+    UNION SELECT DISTINCT user_id FROM interactions
+  `).all().map(r => r.user_id);
+}
+
 // ── dashboard helpers ─────────────────────────────────────────────────────────
 
 const VIEWABLE_TABLES = [
   'business_profile', 'interactions', 'learned_insights', 'entities',
   'campaigns', 'creatives', 'posts', 'insights_daily', 'goals', 'reflections',
+  'agenda_items', 'attendance', 'discovery_state', 'daily_briefings',
 ];
 
 export function listTables() {
@@ -443,7 +580,9 @@ export function buildContextBundle(userId) {
   const goals = listGoals(userId, 'active');
   const recentCampaigns = listCampaigns(userId).slice(0, 5);
   const lastReflection = recentReflections(userId, 1)[0] || null;
-  return { profile, insights, goals, recentCampaigns, lastReflection };
+  const agenda = listAgenda(userId, 'pending', 5);
+  const attendance = recentAttendance(userId, 6);
+  return { profile, insights, goals, recentCampaigns, lastReflection, agenda, attendance };
 }
 
 export function formatContextForPrompt(bundle) {
@@ -477,6 +616,18 @@ export function formatContextForPrompt(bundle) {
   if (bundle.lastReflection) {
     lines.push('\n## LAST REFLECTION');
     lines.push(bundle.lastReflection.summary);
+  }
+  if (bundle.agenda && bundle.agenda.length) {
+    lines.push('\n## CURRENT AGENDA (Shaul plans to do)');
+    for (const a of bundle.agenda) {
+      lines.push(`- [${a.kind || 'task'}] ${a.title}${a.due_at ? ` (due ${a.due_at})` : ''}`);
+    }
+  }
+  if (bundle.attendance && bundle.attendance.length) {
+    lines.push('\n## RECENT ATTENDANCE');
+    for (const a of bundle.attendance) {
+      lines.push(`- ${a.session_date || a.created_at.slice(0, 10)} ${a.session_label}: ${a.headcount} people${a.revenue ? ` (₪${a.revenue})` : ''}`);
+    }
   }
   return lines.join('\n');
 }

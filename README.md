@@ -1,6 +1,6 @@
 # GreenInvoice + Shaul WhatsApp Agent
 
-An AI-powered WhatsApp agent built around **Shaul** — your Israeli business and marketing mentor. Phase 1 connects Shaul to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). **Phase 2 turns Shaul into a full marketing department** with sub-agents (Strategist, Creative, Campaign Manager, Publisher, Analyst, Mentor), Facebook & Instagram publishing, and a SQLite long-term memory you can browse in the dashboard.
+An AI-powered WhatsApp agent built around **Shaul** — your Israeli business and marketing mentor. Phase 1 connects Shaul to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). **Phase 2 turned Shaul into a full marketing department** with sub-agents (Strategist, Creative, Campaign Manager, Publisher, Analyst, Mentor), Facebook & Instagram publishing, and SQLite long-term memory. **Phase 3 makes Shaul *proactive*** — a marketing employee who leads the agenda, runs dynamic discovery, sends daily briefings, drafts work for your approval, and tracks real outcomes (workshop attendance) alongside Meta metrics. Final publishing is always your decision.
 
 ---
 
@@ -9,6 +9,7 @@ An AI-powered WhatsApp agent built around **Shaul** — your Israeli business an
 - [How It Works](#how-it-works)
 - [Commands](#commands)
 - [Phase 2: Shaul as Marketing Department](#phase-2-shaul-as-marketing-department)
+- [Phase 3: Shaul as Your Marketing Employee](#phase-3-shaul-as-your-marketing-employee)
 - [Architecture](#architecture)
 - [File Structure](#file-structure)
 - [Setup — Windows](#setup--windows)
@@ -190,6 +191,96 @@ Publishing rules enforced:
 - IG container is polled until `FINISHED` before publishing (per Meta's 2-step content publishing API)
 - Scheduled posts auto-publish on a 60-second loop once their `scheduled_at` is reached
 
+## Phase 3: Shaul as Your Marketing Employee
+
+Phase 2 gave Shaul a department. **Phase 3 puts him in charge of it.** He behaves like a senior marketing employee who works *for* you, not the other way around. He leads the conversation, sets the agenda, drafts everything for your approval, and only acts when you say "go". Final publishing to Facebook or Instagram is **always** your explicit choice — Shaul never auto-posts, even on a schedule.
+
+The design follows current state-of-the-art proactive-agent patterns ([Anthropic's orchestrator-worker model](https://www.anthropic.com/engineering/multi-agent-research-system) + [2026 agentic-marketing campaign-planner blueprints](https://www.digitalapplied.com/blog/agentic-marketing-2026-ai-runs-campaign-humans-set-strategy)) where the AI runs the strategy and humans set direction.
+
+### What changed from Phase 2
+
+| Phase 2 | Phase 3 |
+|---|---|
+| Shaul replies when spoken to | Shaul **leads**: daily briefing, agenda, "go" command |
+| `mk onboard` was a 9-question form | `mk discovery` asks the **next-best question** dynamically |
+| Free-text chat → Mentor reply | Free-text chat → Mentor reply **+ silent extraction** of profile/goals/attendance |
+| Scheduled posts auto-published when time hit | Scheduled posts ping you for **final approval** before going live |
+| Reports = Meta metrics only | Reports correlate Meta metrics ↔ posts ↔ **workshop attendance** |
+| Notes about the business went to Notion | Business strategy is now classified as `marketing` and routes to SQL memory |
+| 6 sub-agents (Strategist, Creative, Campaign Mgr, Publisher, Analyst, Mentor) | + **Director** — picks next-best actions, runs daily briefings |
+
+### The proactive loop
+
+1. **Every WhatsApp message** runs in parallel:
+   - **Mentor** replies to the user in Shaul's voice
+   - **Strategist (silent)** mines the message for `business_profile` updates, goals, entities, and attendance reports
+   - **Director** refreshes the agenda based on what's now known
+2. **Every morning at 08:00** (configurable via `SHAUL_BRIEFING_HOUR`) Shaul sends a proactive WhatsApp briefing: 3 bullets on what's on the agenda + an invitation to say "יאללה".
+3. **When you say "יאללה" / "go"**, Shaul executes the top agenda item immediately — drafts a post, plans a campaign, pulls metrics, etc.
+4. **When a scheduled post hits its time**, Shaul nudges you: *"Post #42 is ready, send `mk publish 42` to ship it."* — never auto-publishes.
+
+### New `mk` commands (Phase 3)
+
+| Command | What Shaul does |
+|---|---|
+| `mk go` | Execute the top agenda item right now |
+| `mk agenda` | Show what Shaul plans to do for you |
+| `mk briefing` | Generate today's briefing on demand |
+| `mk discovery` | Ask the single most-important question Shaul still doesn't know |
+| `mk calendar` | 14-day content calendar (drafts + scheduled + published) |
+| `mk attendance "סדנת שבת" 12` | Log workshop headcount (and optional revenue) |
+| `mk publish 42` | **You** explicitly approve a post — Publisher ships it to FB/IG |
+| `mk skip` / `mk skip 42` | Skip the top agenda item (or defer a post) |
+
+Existing `mk plan / mk post / mk fb / mk ig / mk schedule / mk campaigns / mk report / mk reflect / mk memory / mk help / mk onboard` still work.
+
+### New SQL tables
+
+| Table | Purpose |
+|---|---|
+| `agenda_items` | Director's todo list FOR you — title, detail, kind, priority, status |
+| `attendance` | Workshop headcount + revenue per session — the real KPI |
+| `discovery_state` | Tracks which discovery hypotheses are confirmed, for dynamic interview |
+| `daily_briefings` | One row per day per user — prevents double-briefing |
+
+All viewable in the dashboard memory browser at **http://localhost:3001/memory**.
+
+### How "working FOR you" actually feels
+
+A natural conversation now looks like this (no `mk onboard` needed):
+
+```
+You:    הי. זוהי קבוצת חשיבה על איך לשווק את העסק.
+Shaul:  נעים מאוד. מה העסק שלך מוכר?
+You:    סדנאות אומנות, חוגים, ומשחקי בריחה.
+Shaul:  נשמע כיף. מי הקהל העיקרי — הורים שמביאים ילדים, או קבוצות מבוגרים?
+        (silently saved: industry=workshops/escape rooms, offer=art workshops & escape rooms)
+
+You:    הורים עם ילדים בני 6-12 בעיקר.
+Shaul:  סבבה. אני בונה לך עכשיו תוכנית קמפיין ל-30 יום ומכין 3 פוסטים ראשונים.
+        תגיד "יאללה" וזז.
+        (Director added: plan_campaign, draft_post×3 to agenda)
+
+You:    יאללה.
+Shaul:  🚀 מתחיל: בניית תוכנית קמפיין ל-30 יום
+        [Campaign Manager runs]
+        ...
+```
+
+After 4-5 turns of natural chat, `business_profile`, `goals`, `entities`, and `agenda_items` are all populated — without you ever filling a form.
+
+### Approval-only publishing — explicit guarantees
+
+- No FB/IG post is ever published without you typing the approve word (or `mk publish <id>`).
+- Scheduled posts that hit their time → `awaiting_final_approval` status + WhatsApp nudge → you say `mk publish 42` → Publisher ships it.
+- The `Publisher` sub-agent is a pure executor — it has no autonomy. It only runs when explicitly invoked.
+
+### Optional environment var
+
+```
+SHAUL_BRIEFING_HOUR=8     # Local hour for the daily proactive briefing. Default 8.
+```
+
 ---
 
 ## Architecture
@@ -197,21 +288,22 @@ Publishing rules enforced:
 ```
 greenInoviceAgent_gemini/
 ├── agent/                        # Node.js WhatsApp agent
-│   ├── index.js                  # Main router
+│   ├── index.js                  # Main router + daily briefing scheduler
 │   ├── noteHandler.js            # Notion integration
 │   ├── personality/shaul.js      # Persona, prompts, copy
-│   └── marketing/                # Phase 2 — marketing department
-│       ├── cmo.js                # Orchestrator
-│       ├── memory.js             # SQLite long-term memory
+│   └── marketing/                # Phase 2/3 — marketing department
+│       ├── cmo.js                # Orchestrator (CMO) — silent extraction, agenda execution
+│       ├── memory.js             # SQLite long-term memory (14 tables)
 │       ├── meta.js               # Facebook + Instagram Graph API
 │       └── subagents/
 │           ├── common.js         # Shared prompt builder
-│           ├── strategist.js     # Onboarding + profile refinement
+│           ├── strategist.js     # Onboarding + silent extraction + dynamic discovery
 │           ├── creative.js       # Copy & image briefs
 │           ├── campaignManager.js
-│           ├── publisher.js      # Pure FB/IG publishing executor
-│           ├── analyst.js        # Insights + weekly reports
-│           └── mentor.js         # Synthesizing voice + self-reflection
+│           ├── publisher.js      # Pure FB/IG publishing executor (manual-trigger only)
+│           ├── analyst.js        # Insights + weekly reports (correlates with attendance)
+│           ├── mentor.js         # Proactive voice + self-reflection
+│           └── director.js       # Phase 3 — picks next-best actions, runs daily briefings
 └── GreenInvoice-MCP-main/        # TypeScript MCP server
     └── src/
         ├── index.ts              # MCP server entry

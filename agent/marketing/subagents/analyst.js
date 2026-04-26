@@ -3,7 +3,7 @@
 
 import { buildPrompt, runSubagent } from './common.js';
 import * as meta from '../meta.js';
-import { upsertDailyInsight, recentInsights } from '../memory.js';
+import { upsertDailyInsight, recentInsights, recentAttendance, listPosts } from '../memory.js';
 
 export async function pullDailyInsights({ userId }) {
   if (!meta.isConfigured()) return { skipped: true, reason: 'Meta API not configured' };
@@ -50,17 +50,26 @@ export async function pullDailyInsights({ userId }) {
 
 export async function weeklyReport({ userId, ai, modelName }) {
   const insights = recentInsights(userId, 14);
+  const attendance = recentAttendance(userId, 12);
+  const recentPosts = listPosts(userId).slice(0, 20).map(p => ({
+    id: p.id, platform: p.platform, status: p.status,
+    published_at: p.published_at, caption: (p.caption || '').slice(0, 100),
+  }));
+
   const prompt = buildPrompt({
     userId,
-    role: `You are the Analyst. Read the metrics and give the user a plain-Hebrew weekly report.
+    role: `You are the Analyst. Read all the data and give the user a plain-Hebrew weekly report. You correlate THREE signals: Meta metrics (reach, engagement), recent posts that were published, and ACTUAL business outcomes (workshop attendance / revenue). The user cares about real outcomes — kids in the room — not vanity metrics. Tie marketing effort to attendance whenever possible.
+
 Be honest. If numbers are low, say so. If you don't have enough data, say that too — don't invent.
-Always end with the single most important thing to do this week.`,
-    task: `Recent insights (last 14 days):\n${JSON.stringify(insights, null, 2)}\n\nWrite the weekly report.`,
+Always end with ONE concrete thing Shaul will do this week (not the user — Shaul).`,
+    task: `Meta insights (last 14 days):\n${JSON.stringify(insights, null, 2)}\n\nWorkshop attendance:\n${JSON.stringify(attendance, null, 2)}\n\nRecent posts (last 20):\n${JSON.stringify(recentPosts, null, 2)}\n\nWrite the report.`,
     schemaHint: `{
   "headline": "one-line summary in Hebrew",
-  "highlights": [ "short bullet 1", "short bullet 2", ... ],
+  "attendance_summary": "1-2 sentences on attendance trend (or 'no data')",
+  "marketing_summary":  "1-2 sentences on Meta metrics (or 'no data')",
+  "correlations": [ "post X seemed to drive attendance Y", "..." ],
   "concerns": [ "short bullet" ],
-  "this_week_focus": "the ONE thing to focus on next 7 days",
+  "shauls_next_move": "the ONE thing Shaul will do this week (a verb-led sentence: 'I will draft...', 'I will pull...')",
   "have_enough_data": true|false
 }`,
   });

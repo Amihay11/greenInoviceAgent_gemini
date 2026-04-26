@@ -18,6 +18,7 @@ const IS_WIN    = process.platform === 'win32';
 const VIEWABLE_TABLES = [
   'business_profile', 'interactions', 'learned_insights', 'entities',
   'campaigns', 'creatives', 'posts', 'insights_daily', 'goals', 'reflections',
+  'agenda_items', 'attendance', 'discovery_state', 'daily_briefings',
 ];
 let memDb = null;
 function getMemDb() {
