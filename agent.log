@@ -1,0 +1,207 @@
+◇ injected env (9) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP Server...
+Connected to GreenInvoice MCP.
+Loaded 10 tools from GreenInvoice MCP.
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+◇ injected env (9) from .env // tip: ⌘ enable debugging { debug: true }
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP Server...
+Connected to GreenInvoice MCP.
+Loaded 10 tools from GreenInvoice MCP.
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+◇ injected env (9) from .env // tip: ⌘ suppress logs { quiet: true }
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP Server...
+Connected to GreenInvoice MCP.
+Loaded 10 tools from GreenInvoice MCP.
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+◇ injected env (9) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP Server...
+Connected to GreenInvoice MCP.
+Loaded 10 tools from GreenInvoice MCP.
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+Marketing handler error: Error: Attempted to use detached Frame '56B2549E1866E6FA098B3EE07A94D798'.
+    at CdpFrame.<anonymous> (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:107:23)
+    at CdpPage.evaluate (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/api/Page.js:830:43)
+    at Client.sendMessage (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/whatsapp-web.js/src/Client.js:1533:44)
+    at handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:210:31)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:383:5)
+/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:107
+                throw new Error(message(this));
+                      ^
+
+Error: Attempted to use detached Frame '56B2549E1866E6FA098B3EE07A94D798'.
+    at CdpFrame.<anonymous> (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:107:23)
+    at CdpPage.evaluate (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/api/Page.js:830:43)
+    at Client.sendMessage (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/whatsapp-web.js/src/Client.js:1533:44)
+    at handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:213:20)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:383:5)
+
+Node.js v25.8.2
+WhatsApp Client is ready!
+Briefing send failed for 120363429062404992@g.us: Attempted to use detached Frame '63A84D0471BC1FF8E9CCC82579797C5E'.
+Briefing send failed for 273787018858519@lid: Attempted to use detached Frame '63A84D0471BC1FF8E9CCC82579797C5E'.
+◇ injected env (9) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+[mentor] grounded path failed, falling back: {"error":{"code":400,"message":"Built-in tools ({google_search}) and Function Calling cannot be combined in the same request. Please choose one to continue.","status":"INVALID_ARGUMENT"}}
+[mentor] grounded path failed, falling back: {"error":{"code":400,"message":"Built-in tools ({google_search}) and Function Calling cannot be combined in the same request. Please choose one to continue.","status":"INVALID_ARGUMENT"}}
+◇ injected env (9) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+[mentor] grounded path failed, falling back: {"error":{"code":400,"message":"Built-in tools ({google_search}) and Function Calling cannot be combined in the same request. Please choose one to continue.","status":"INVALID_ARGUMENT"}}
+◇ injected env (9) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+[mentor] grounded path failed, falling back: {"error":{"code":400,"message":"Built-in tools ({google_search}) and Function Calling cannot be combined in the same request. Please choose one to continue.","status":"INVALID_ARGUMENT"}}
+[mentor] grounded path failed, falling back: {"error":{"code":400,"message":"Built-in tools ({google_search}) and Function Calling cannot be combined in the same request. Please choose one to continue.","status":"INVALID_ARGUMENT"}}
+◇ injected env (9) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+Shaul is running on model: gemini-2.5-pro
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+◇ injected env (9) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Shaul is running on model: gemini-2.0-flash
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+◇ injected env (9) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+Shaul is running on model: gemini-2.0-flash
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/node/BrowserLauncher.js:175
+                throw new Error(`The browser is already running for ${launchArgs.userDataDir}. Use a different \`userDataDir\` or stop the running browser first.`);
+                      ^
+
+Error: The browser is already running for /data/data/com.termux/files/home/greenInoviceAgent/agent/whatsapp-auth/session. Use a different `userDataDir` or stop the running browser first.
+    at ChromeLauncher.launch (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/node/BrowserLauncher.js:175:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Client.initialize (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/whatsapp-web.js/src/Client.js:462:23)
+
+Node.js v25.8.2
+◇ injected env (9) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+Shaul is running on model: gemini-2.0-flash
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:107
+                throw new Error(message(this));
+                      ^
+
+Error: Attempted to use detached Frame '10F9C929FBEE661C6A84D15B8152DA63'.
+    at CdpFrame.<anonymous> (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:107:23)
+    at CdpPage.evaluate (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/puppeteer-core/lib/cjs/puppeteer/api/Page.js:830:43)
+    at Client.inject (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/whatsapp-web.js/src/Client.js:126:38)
+    at async Client.initialize (/data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/whatsapp-web.js/src/Client.js:493:9)
+
+Node.js v25.8.2
+◇ injected env (9) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Shaul is running on model: gemini-2.0-flash
+Starting GreenInvoice MCP server...
+Connected to GreenInvoice MCP — 10 tools.
+Total MCP tools loaded: 10
+Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.
+Initializing WhatsApp Client...
+WhatsApp Client is ready!
+[CMO] classifier error: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+[mentor] grounded path failed, falling back: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+Marketing handler error: ApiError: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+    at throwErrorIfNotOK (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13393:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13096:13
+    at async Models.generateContent (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:14501:24)
+    at async Module.mentorReply (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/subagents/mentor.js:71:15)
+    at async handleMarketingMessage (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/cmo.js:131:21)
+    at async handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:407:19)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:579:5) {
+  status: 404
+}
+[CMO] classifier error: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+[mentor] grounded path failed, falling back: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+Marketing handler error: ApiError: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+    at throwErrorIfNotOK (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13393:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13096:13
+    at async Models.generateContent (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:14501:24)
+    at async Module.mentorReply (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/subagents/mentor.js:71:15)
+    at async handleMarketingMessage (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/cmo.js:131:21)
+    at async handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:407:19)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:579:5) {
+  status: 404
+}
+[CMO] classifier error: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+[mentor] grounded path failed, falling back: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+Marketing handler error: ApiError: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+    at throwErrorIfNotOK (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13393:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13096:13
+    at async Models.generateContent (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:14501:24)
+    at async Module.mentorReply (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/subagents/mentor.js:71:15)
+    at async handleMarketingMessage (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/cmo.js:131:21)
+    at async handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:407:19)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:579:5) {
+  status: 404
+}
+[CMO] classifier error: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+[mentor] grounded path failed, falling back: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+Marketing handler error: ApiError: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+    at throwErrorIfNotOK (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13393:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13096:13
+    at async Models.generateContent (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:14501:24)
+    at async Module.mentorReply (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/subagents/mentor.js:71:15)
+    at async handleMarketingMessage (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/cmo.js:131:21)
+    at async handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:407:19)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:579:5) {
+  status: 404
+}
+[CMO] classifier error: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+[mentor] grounded path failed, falling back: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+Marketing handler error: ApiError: {"error":{"code":404,"message":"This model models/gemini-2.0-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.","status":"NOT_FOUND"}}
+    at throwErrorIfNotOK (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13393:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:13096:13
+    at async Models.generateContent (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/node_modules/@google/genai/dist/node/index.mjs:14501:24)
+    at async Module.mentorReply (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/subagents/mentor.js:71:15)
+    at async handleMarketingMessage (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/marketing/cmo.js:131:21)
+    at async handleMkRouted (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:407:19)
+    at async Client.<anonymous> (file:///data/data/com.termux/files/home/greenInoviceAgent/agent/index.js:579:5) {
+  status: 404
+}

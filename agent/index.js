@@ -47,7 +47,7 @@ if (!process.env.MCP_SERVER_PATH) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 console.log(`Shaul is running on model: ${modelName}`);
 
 // --- MCP Setup (multi-server) ---
@@ -226,19 +226,34 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
   const declarations = [...mcpTools, ...extraTools];
   if (includeSendWhatsapp) declarations.push(SEND_WHATSAPP_DECL);
 
-  const chat = ai.chats.create({
+  const tools = [];
+  if (declarations.length > 0) {
+    tools.push({ function_declarations: declarations });
+  } else {
+    tools.push({ google_search: {} });
+  }
+
+  const config = {
+    tools,
+    systemInstruction,
+  };
+
+  // Use generateContent instead of chats.create to be more explicit and avoid sticky tool state
+  const contents = [...history];
+  if (typeof message === 'string') {
+    contents.push({ role: 'user', parts: [{ text: message }] });
+  } else {
+    contents.push({ role: 'user', parts: message });
+  }
+
+  let result = await ai.models.generateContent({
     model: modelName,
-    history,
-    config: {
-      tools: [
-        { functionDeclarations: declarations },
-        { googleSearch: {} },
-      ],
-      systemInstruction,
-    },
+    contents,
+    config,
   });
 
-  let result = await chat.sendMessage({ message });
+  let responseText = result.text;
+  let currentHistory = [...contents, { role: 'model', parts: result.candidates[0].content.parts }];
 
   while (result.functionCalls && result.functionCalls.length > 0) {
     const fc = result.functionCalls[0];
@@ -258,12 +273,20 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
       console.error(`Error executing tool ${fc.name}:`, err.message);
       response = { error: err.message };
     }
-    result = await chat.sendMessage({
-      message: [{ functionResponse: { name: fc.name, response } }],
+
+    const functionResponsePart = { functionResponse: { name: fc.name, response } };
+    currentHistory.push({ role: 'user', parts: [functionResponsePart] });
+
+    result = await ai.models.generateContent({
+      model: modelName,
+      contents: currentHistory,
+      config,
     });
+    responseText = result.text;
+    currentHistory.push({ role: 'model', parts: result.candidates[0].content.parts });
   }
 
-  return { text: result.text, history: await chat.getHistory() };
+  return { text: responseText, history: currentHistory };
 }
 
 // --- WhatsApp Setup ---
@@ -324,7 +347,7 @@ Categories:
 - marketing: ANY conversation about the user's business, products, services, customers (ICP),
   goals, competitors, brand, content, posts, ads, campaigns, social channels, marketing
   strategy, workshop attendance ("היו 12 ילדים"), OR asking Shaul for marketing/business
-  advice. If the message is ABOUT THEIR BUSINESS or strategy, this is marketing.
+  advice. Includes contact lookup ("מה המספר של..."). If the message is ABOUT THEIR BUSINESS, strategy, or customers, this is marketing.
 - note_remind: setting a reminder for a specific future time
 - note_search: searching through saved notes or ideas
 - note_summary_day: summarizing today's saved notes

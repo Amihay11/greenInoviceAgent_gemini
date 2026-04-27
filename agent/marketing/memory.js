@@ -722,3 +722,12 @@ export function formatContextForPrompt(bundle) {
   }
   return lines.join('\n');
 }
+
+export function getUsageQuota(userId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const row = getDb().prepare(`
+    SELECT COUNT(*) as c FROM interactions
+    WHERE user_id = ? AND role = 'user' AND created_at >= ?
+  `).get(userId, today + ' 00:00:00');
+  return row ? row.c : 0;
+}

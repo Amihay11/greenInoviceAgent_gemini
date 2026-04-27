@@ -232,7 +232,7 @@ async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGr
     case 'schedule_followup':   return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'schedule_followup', args });
     case 'add_calendar_event':  return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'add_event', args });
     case 'meta_insights':       return metaInsightsFlow({ chatId, ai, modelName, args });
-    case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args });
+    case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, args });
     default:                    return undefined; // unknown — caller falls back to mentor
   }
 }
@@ -322,7 +322,7 @@ async function handleMkCommand({ chatId, sub, arg, ai, modelName, runGeminiWithT
     case 'skip':       return skipTopAgenda({ userId, arg });
     case 'publish':    return publishCommand({ userId, arg });
     case 'cleanup':    return cleanupCommand({ userId, ai, modelName });
-    case 'dm':         return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args: { client_name: arg } });
+    case 'dm':         return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, args: { client_name: arg } });
     case 'help':       return reply(userId, MK_HELP);
     default:           return reply(userId, `לא מכיר את ${sub}. נסה: ${MK_HELP}`);
   }
@@ -685,7 +685,7 @@ Task: propose a Google Calendar event. TODAY is ${today}.
 // dm_client — look up the client, draft the message, ask for approval BEFORE
 // sending. The local send_whatsapp_message tool is also available so the agent
 // can drive this end-to-end in one Gemini turn.
-async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args }) {
+async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, args }) {
   const userId = chatId;
   if (!runGeminiWithTools) {
     return reply(userId, '⚠️ הסביבה לא מוכנה לשליחת הודעות.');
@@ -694,15 +694,17 @@ async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGree
   if (!clientName) {
     return reply(userId, 'תכתוב למי לשלוח. למשל: "תכתוב לדנה כהן הודעה שתאשר את הסדנה".');
   }
-  await reply(userId, `🔍 מחפש את ${clientName} בלקוחות...`);
+  await reply(userId, `🔍 מחפש את ${clientName} באנשי קשר...`);
   const mcp = getGreenInvoiceClient && getGreenInvoiceClient();
   let candidates = [];
-  if (mcp) {
-    try { candidates = await lookupClient({ name: clientName, mcpClient: mcp }); }
-    catch (e) { console.error('[CMO] lookupClient:', e.message); }
+  try {
+    candidates = await lookupClient({ name: clientName, mcpClient: mcp, waClient });
+  } catch (e) {
+    console.error('[CMO] lookupClient:', e.message);
   }
+
   if (candidates.length === 0) {
-    return reply(userId, `לא מצאתי את ${clientName} ב-GreenInvoice. תוודא את השם או שלח את המספר ישירות.`);
+    return reply(userId, `לא מצאתי את ${clientName} ב-GreenInvoice או באנשי הקשר. תוודא את השם או שלח את המספר ישירות.`);
   }
   if (candidates.length > 1) {
     const lines = ['🔎 מצאתי כמה תוצאות, איזה הוא הנכון?'];

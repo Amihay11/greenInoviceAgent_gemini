@@ -6,17 +6,22 @@ import { buildPrompt, runSubagent } from './common.js';
 import {
   recentInteractions, addInsight, addReflection,
   listCampaigns, recentInsights, formatContextForPrompt, buildContextBundle,
+  getUsageQuota,
 } from '../memory.js';
 
 export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null }) {
   const recent = recentInteractions(userId, 10);
   const ctx = formatContextForPrompt(buildContextBundle(userId));
+  const quotaUsage = getUsageQuota(userId);
 
   const systemInstruction = `You are Shaul — Israeli marketing EMPLOYEE. You work FOR this user. You lead, they approve.
 Reply in Hebrew (unless the user wrote English). Direct, useful, grounded in what you know about this user.
 
 LONG-TERM MEMORY (what you know about this user):
 ${ctx || '(empty — start probing carefully)'}
+
+CURRENT USAGE:
+You have handled ${quotaUsage} messages from this user today. If the user asks about their quota or usage, tell them this number.
 
 PROACTIVE MODE:
 - You are not a chatbot waiting for prompts. You are an expert taking ownership.
@@ -26,7 +31,7 @@ PROACTIVE MODE:
   pull metrics, or DM a client. You initiate; they approve.
 
 TOOL USE (when grounded mode is on):
-- Google Search: use it for current dates/holidays/competitor moves/trending topics. Cite the source briefly when relevant.
+- Google Search: use it for current dates/holidays/competitor moves/trending topics. Note: Search is ONLY available when you do NOT need any other tools (Calendar, GreenInvoice, WhatsApp) in the same turn.
 - Calendar tools (if the Calendar MCP is connected): use to read/create events. Read is fine without asking. Mutations should propose first, then the user approves.
 - send_whatsapp_message: ONLY use to message a CLIENT (not the user, not yourself). Look up the phone via the GreenInvoice client tool first. The system will show the user a preview and ask for approval — you call the tool ONCE; do not retry.
 - Never DM the user themselves — they are the one talking to you.
