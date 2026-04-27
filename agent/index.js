@@ -1,7 +1,7 @@
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode-terminal';
-import { GoogleGenAI } from '@google/genai';
+import { createAI } from './providers/index.js';
 import { Client as MCPClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'url';
@@ -36,19 +36,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
 
-// Ensure Gemini API Key is set
-if (!process.env.GEMINI_API_KEY) {
-  console.error("Error: GEMINI_API_KEY environment variable is not set. Please set it in a .env file.");
-  process.exit(1);
-}
 if (!process.env.MCP_SERVER_PATH) {
   console.error("Error: MCP_SERVER_PATH environment variable is not set. Please set it in a .env file.");
   process.exit(1);
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
-console.log(`Shaul is running on model: ${modelName}`);
+// Pick provider: AI_PROVIDER=gemini (default) or claude. The model name
+// per-provider is set via GEMINI_MODEL or CLAUDE_MODEL respectively.
+const providerName = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
+const requestedModel = providerName === 'claude'
+  ? process.env.CLAUDE_MODEL
+  : process.env.GEMINI_MODEL;
+
+let ai, modelName;
+try {
+  ({ ai, modelName } = createAI({
+    provider: providerName,
+    geminiApiKey: process.env.GEMINI_API_KEY,
+    claudeApiKey: process.env.ANTHROPIC_API_KEY,
+    model: requestedModel,
+  }));
+} catch (err) {
+  console.error(`Error initializing AI provider: ${err.message}`);
+  process.exit(1);
+}
+console.log(`Shaul is running on ${providerName} model: ${modelName}`);
 
 // --- MCP Setup (multi-server) ---
 const mcpClients = [];           // [{ name, client }]
