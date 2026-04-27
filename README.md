@@ -1,6 +1,6 @@
-# GreenInvoice WhatsApp Agent
+# GreenInvoice + Shaul WhatsApp Agent
 
-An AI-powered WhatsApp agent that connects to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). Send a WhatsApp message to your own number and the agent handles invoices, receipts, clients, and more — plus general-purpose AI tasks.
+An AI-powered WhatsApp agent built around **Shaul** — your Israeli business and marketing mentor. Phase 1 connects Shaul to the [GreenInvoice](https://www.greeninvoice.co.il) Israeli invoicing API via Google Gemini and the Model Context Protocol (MCP). **Phase 2 turned Shaul into a full marketing department** with sub-agents (Strategist, Creative, Campaign Manager, Publisher, Analyst, Mentor), Facebook & Instagram publishing, and SQLite long-term memory. **Phase 3 makes Shaul *proactive*** — a marketing employee who leads the agenda, runs dynamic discovery, sends daily briefings, drafts work for your approval, and tracks real outcomes (workshop attendance) alongside Meta metrics. **Phase 4 makes Shaul private, conversational, and connected** — an inbound allow-list, plain-Hebrew commands (no `mk` prefix needed), Google Calendar via MCP, Canva style-matched designs, internet grounding, and proactive WhatsApp DMs to clients (always with your approval). Final publishing and outbound DMs are always your decision.
 
 ---
 
@@ -8,6 +8,9 @@ An AI-powered WhatsApp agent that connects to the [GreenInvoice](https://www.gre
 
 - [How It Works](#how-it-works)
 - [Commands](#commands)
+- [Phase 2: Shaul as Marketing Department](#phase-2-shaul-as-marketing-department)
+- [Phase 3: Shaul as Your Marketing Employee](#phase-3-shaul-as-your-marketing-employee)
+- [Phase 4: Private, Connected Shaul](#phase-4-private-connected-shaul)
 - [Architecture](#architecture)
 - [File Structure](#file-structure)
 - [Setup — Windows](#setup--windows)
@@ -122,17 +125,272 @@ Returns the full command reference in Hebrew.
 
 ---
 
+## Phase 2: Shaul as Marketing Department
+
+Shaul is no longer just a chatbot — he's a **CMO orchestrator** who delegates to a team of specialist sub-agents. Each sub-agent has its own role, system prompt, and tools. Long-term memory lives in a SQLite database you can browse from the dashboard. The architecture follows the Anthropic orchestrator-worker pattern (lead agent + structured-result subagents) with CrewAI-style tiered memory (short-term, long-term, entity, external).
+
+### The team
+
+| Sub-agent | Role | Tools |
+|-----------|------|-------|
+| **Strategist** | Runs the discovery interview; distills user messages into profile updates | SQL memory |
+| **Creative** | Writes ad copy, captions, image briefs, multiple angle variations | Gemini |
+| **Campaign Manager** | Plans full campaigns: objective, audience, budget, schedule, KPIs | SQL memory |
+| **Publisher** | Pure executor — posts approved drafts to Facebook Page & Instagram Business | Meta Graph API v21 |
+| **Analyst** | Pulls daily metrics, writes weekly reports in plain Hebrew | Meta Insights API + SQL |
+| **Mentor (Shaul)** | The voice the user hears; synthesises everything; runs weekly self-reflection | All of memory |
+
+### Self-awareness & self-adaptation loop
+
+1. **Onboarding** (first run, `mk onboard`) — Strategist asks 9 progressive questions about your business, ICP, offer, budget, channels, brand voice, constraints. Saved to `business_profile`.
+2. **Continuous learning** — every WhatsApp interaction is logged to `interactions`. Sub-agents read `business_profile` + `learned_insights` before every response, so output evolves as Shaul learns you.
+3. **Weekly reflection** (`mk reflect`) — Mentor reads the last ~60 interactions + campaign results, writes a `reflections` row, and appends new `learned_insights` (e.g. *"user prefers reels over static posts (conf 0.8)"*). Future replies get grounded in these insights.
+4. **Approval gates** — every action that posts to FB/IG, spends money, or saves a major plan requires explicit `אישור` / `approve`. Shaul never publishes on his own.
+
+### `mk` commands
+
+| Command | What it does |
+|---|---|
+| `mk onboard` | Start (or restart) the discovery interview |
+| `mk plan <goal>` | Campaign Manager drafts a complete campaign plan; awaits approval |
+| `mk post <idea>` | Creative drafts an Instagram post; awaits approval to publish |
+| `mk fb <idea>` | Same, but for Facebook |
+| `mk schedule` | List scheduled & pending posts |
+| `mk campaigns` | List all your campaigns with status |
+| `mk report` | Analyst's plain-Hebrew weekly report |
+| `mk reflect` | Trigger Mentor self-reflection — distills new insights |
+| `mk memory` | Show the compact context Shaul holds about you |
+| `mk help` | Show all `mk` commands |
+
+Plain text without `mk` is also auto-routed: the intent classifier has a new `marketing` category that routes through the CMO.
+
+### Long-term memory (SQLite, viewable in dashboard)
+
+Tables created automatically in `agent/data/shaul-memory.db` on first interaction:
+
+| Table | Holds |
+|-------|-------|
+| `business_profile` | One row per user — name, industry, offer, ICP, brand voice, budget, channels, constraints |
+| `interactions` | Every user/agent message (short-term memory, paginated) |
+| `learned_insights` | Distilled long-term lessons with confidence scores |
+| `entities` | People, products, competitors mentioned over time |
+| `campaigns` | Planned/active/completed campaigns with full plan JSON |
+| `creatives` | Drafted copy/captions/image briefs |
+| `posts` | Approved/scheduled/published/failed posts on FB/IG |
+| `insights_daily` | Daily metric snapshots from Meta |
+| `goals` | Tracked goals with target + deadline |
+| `reflections` | Weekly self-reflections from the Mentor |
+
+Browse, paginate, and delete rows in your browser at **http://localhost:3001/memory** (linked from the main dashboard).
+
+### Meta API setup (for publishing)
+
+To enable the Publisher sub-agent, fill in `META_PAGE_ID`, `META_PAGE_TOKEN`, and `IG_BUSINESS_ID` in `agent/.env`. Without them, Shaul still drafts campaigns and creatives — they're just saved to memory instead of being posted. Steps to get the tokens are documented in `agent/.env.example`.
+
+Publishing rules enforced:
+- Instagram requires an `image_url` — Shaul will hold the post in `pending_image` status until you provide one
+- IG container is polled until `FINISHED` before publishing (per Meta's 2-step content publishing API)
+- Scheduled posts auto-publish on a 60-second loop once their `scheduled_at` is reached
+
+## Phase 3: Shaul as Your Marketing Employee
+
+Phase 2 gave Shaul a department. **Phase 3 puts him in charge of it.** He behaves like a senior marketing employee who works *for* you, not the other way around. He leads the conversation, sets the agenda, drafts everything for your approval, and only acts when you say "go". Final publishing to Facebook or Instagram is **always** your explicit choice — Shaul never auto-posts, even on a schedule.
+
+The design follows current state-of-the-art proactive-agent patterns ([Anthropic's orchestrator-worker model](https://www.anthropic.com/engineering/multi-agent-research-system) + [2026 agentic-marketing campaign-planner blueprints](https://www.digitalapplied.com/blog/agentic-marketing-2026-ai-runs-campaign-humans-set-strategy)) where the AI runs the strategy and humans set direction.
+
+### What changed from Phase 2
+
+| Phase 2 | Phase 3 |
+|---|---|
+| Shaul replies when spoken to | Shaul **leads**: daily briefing, agenda, "go" command |
+| `mk onboard` was a 9-question form | `mk discovery` asks the **next-best question** dynamically |
+| Free-text chat → Mentor reply | Free-text chat → Mentor reply **+ silent extraction** of profile/goals/attendance |
+| Scheduled posts auto-published when time hit | Scheduled posts ping you for **final approval** before going live |
+| Reports = Meta metrics only | Reports correlate Meta metrics ↔ posts ↔ **workshop attendance** |
+| Notes about the business went to Notion | Business strategy is now classified as `marketing` and routes to SQL memory |
+| 6 sub-agents (Strategist, Creative, Campaign Mgr, Publisher, Analyst, Mentor) | + **Director** — picks next-best actions, runs daily briefings |
+
+### The proactive loop
+
+1. **Every WhatsApp message** runs in parallel:
+   - **Mentor** replies to the user in Shaul's voice
+   - **Strategist (silent)** mines the message for `business_profile` updates, goals, entities, and attendance reports
+   - **Director** refreshes the agenda based on what's now known
+2. **Every morning at 08:00** (configurable via `SHAUL_BRIEFING_HOUR`) Shaul sends a proactive WhatsApp briefing: 3 bullets on what's on the agenda + an invitation to say "יאללה".
+3. **When you say "יאללה" / "go"**, Shaul executes the top agenda item immediately — drafts a post, plans a campaign, pulls metrics, etc.
+4. **When a scheduled post hits its time**, Shaul nudges you: *"Post #42 is ready, send `mk publish 42` to ship it."* — never auto-publishes.
+
+### New `mk` commands (Phase 3)
+
+| Command | What Shaul does |
+|---|---|
+| `mk go` | Execute the top agenda item right now |
+| `mk agenda` | Show what Shaul plans to do for you |
+| `mk briefing` | Generate today's briefing on demand |
+| `mk discovery` | Ask the single most-important question Shaul still doesn't know |
+| `mk calendar` | 14-day content calendar (drafts + scheduled + published) |
+| `mk attendance "סדנת שבת" 12` | Log workshop headcount (and optional revenue) |
+| `mk publish 42` | **You** explicitly approve a post — Publisher ships it to FB/IG |
+| `mk skip` / `mk skip 42` | Skip the top agenda item (or defer a post) |
+
+Existing `mk plan / mk post / mk fb / mk ig / mk schedule / mk campaigns / mk report / mk reflect / mk memory / mk help / mk onboard` still work.
+
+### New SQL tables
+
+| Table | Purpose |
+|---|---|
+| `agenda_items` | Director's todo list FOR you — title, detail, kind, priority, status |
+| `attendance` | Workshop headcount + revenue per session — the real KPI |
+| `discovery_state` | Tracks which discovery hypotheses are confirmed, for dynamic interview |
+| `daily_briefings` | One row per day per user — prevents double-briefing |
+
+All viewable in the dashboard memory browser at **http://localhost:3001/memory**.
+
+### How "working FOR you" actually feels
+
+A natural conversation now looks like this (no `mk onboard` needed):
+
+```
+You:    הי. זוהי קבוצת חשיבה על איך לשווק את העסק.
+Shaul:  נעים מאוד. מה העסק שלך מוכר?
+You:    סדנאות אומנות, חוגים, ומשחקי בריחה.
+Shaul:  נשמע כיף. מי הקהל העיקרי — הורים שמביאים ילדים, או קבוצות מבוגרים?
+        (silently saved: industry=workshops/escape rooms, offer=art workshops & escape rooms)
+
+You:    הורים עם ילדים בני 6-12 בעיקר.
+Shaul:  סבבה. אני בונה לך עכשיו תוכנית קמפיין ל-30 יום ומכין 3 פוסטים ראשונים.
+        תגיד "יאללה" וזז.
+        (Director added: plan_campaign, draft_post×3 to agenda)
+
+You:    יאללה.
+Shaul:  🚀 מתחיל: בניית תוכנית קמפיין ל-30 יום
+        [Campaign Manager runs]
+        ...
+```
+
+After 4-5 turns of natural chat, `business_profile`, `goals`, `entities`, and `agenda_items` are all populated — without you ever filling a form.
+
+### Approval-only publishing — explicit guarantees
+
+- No FB/IG post is ever published without you typing the approve word (or `mk publish <id>`).
+- Scheduled posts that hit their time → `awaiting_final_approval` status + WhatsApp nudge → you say `mk publish 42` → Publisher ships it.
+- The `Publisher` sub-agent is a pure executor — it has no autonomy. It only runs when explicitly invoked.
+
+### Optional environment var
+
+```
+SHAUL_BRIEFING_HOUR=8     # Local hour for the daily proactive briefing. Default 8.
+```
+
+---
+
+## Phase 4: Private, Connected Shaul
+
+Phase 4 closes three remaining gaps: **privacy** (Shaul should respond only to the owners), **friction** (`mk` commands replaced with plain Hebrew), and **capability** (internet, Calendar, Canva, proactive DMs to clients).
+
+### Inbound allow-list
+
+Set `SHAUL_ALLOWED_NUMBERS` in `agent/.env` to a comma-separated list of phone numbers (any format — `0527203222`, `972527203222`, `+972-52-720-3222` all normalize to the same JID). Messages from anyone outside the list are silently dropped. Empty = accept everyone (default — preserves prior behaviour).
+
+```
+SHAUL_ALLOWED_NUMBERS=0527203222,0546736909
+```
+
+### Plain-Hebrew commands (no `mk` prefix needed)
+
+Just talk to Shaul in Hebrew. Examples:
+
+| Old | New |
+|---|---|
+| `mk plan קמפיין לקיץ` | *תכין לי קמפיין לקיץ* |
+| `mk post מבצע סוף שנה` | *כתוב פוסט אינסטגרם על מבצע סוף שנה* |
+| `mk memory` | *מה אתה זוכר עליי?* |
+| `mk go` | *יאללה* |
+| (new) | *מה יש לי היום ביומן?* |
+| (new) | *תכין לי עיצוב ב-Canva* |
+| (new) | *תכתוב לדנה כהן הודעה שתאשר את הסדנה* |
+| (new) | *תראה לי איך הקמפיין רץ* |
+
+The classifier is biased toward `none` so casual chat keeps flowing through Mentor mode (where Shaul replies as himself, with internet + DM tools available in-context). `mk` commands still work for back-compat — `mk help` lists them all.
+
+### Internet grounding (Google Search)
+
+Mentor, Director, and Analyst now ground in `googleSearch: {}`. Shaul can answer "מתי סוף שנת הלימודים השנה?", spot timing opportunities, and benchmark against industry numbers. Strategist + Creative deliberately skip grounding to keep voice consistent.
+
+### Google Calendar via MCP
+
+Phase 4 uses an external Google Calendar MCP server (e.g. [nspady/google-calendar-mcp](https://github.com/nspady/google-calendar-mcp)) — no calendar code lives in this repo. Spin up any community Calendar MCP that exposes tools like `list_events` / `create_event`, point `CALENDAR_MCP_PATH` at it, and Shaul will gain those tools automatically.
+
+```
+CALENDAR_MCP_PATH=/abs/path/to/google-calendar-mcp/dist/index.js
+GOOGLE_CALENDAR_CREDENTIALS=/abs/path/to/credentials.json   # whatever your MCP needs
+```
+
+Read-only listings (`list_events`) execute freely. Mutations (`create_event` etc.) are logged to the new `calendar_events` audit table — visible in the dashboard memory browser.
+
+### Canva (explore → derive style → design in style)
+
+Canva Connect REST (no public Canva MCP exists). Setup:
+
+1. Create an integration at https://www.canva.com/developers/ — get `client_id` + `client_secret`.
+2. Configure the redirect URI to `http://localhost:5234/canva-callback`.
+3. `cd agent && node scripts/canva-oauth.js` — walks the PKCE dance, prints the refresh token to paste into `.env`.
+
+Once configured, ask Shaul: *"תכין לי עיצוב על מבצע סוף שנה"*. He pulls your existing designs, derives a `canva_style_profile` (cached in `marketing_memory`), drafts a caption + visual brief in that style, and asks for two approvals — one for the design, one for the FB/IG publish.
+
+### Proactive WhatsApp DMs to clients
+
+The Mentor sub-agent now has access to a local `send_whatsapp_message` function tool. Tell Shaul: *"תכתוב לדנה כהן הודעה שתאשר את הסדנה"*. He looks up the phone via the GreenInvoice MCP, drafts a message, and proposes sending it. **Nothing is sent until you reply `אשר`** — the approval gate is enforced in code (a structural `pendingApprovals` Map), not by prompt instructions, so you cannot accidentally bypass it. All sent messages are logged to `outbound_messages`.
+
+### Multi-MCP architecture
+
+`agent/index.js:setupMCP()` now loads multiple MCP servers in parallel, each gated by an env var:
+
+- `MCP_SERVER_PATH` — GreenInvoice (mandatory)
+- `CALENDAR_MCP_PATH` — Google Calendar (optional)
+- `CANVA_MCP_PATH` — Canva (optional, fallback to direct REST)
+- `META_MCP_PATH` — Meta (optional, fallback to direct REST in `meta.js`)
+
+Tools from every connected server collapse into the same Gemini function-call namespace (`toolToClientMap`). One uniform code path — Gemini sees `client.search`, `create_event`, and your local `send_whatsapp_message` side by side.
+
+### New SQL tables
+
+| Table | Purpose |
+|---|---|
+| `calendar_events` | Audit trail of Calendar mutations (start, end, args, response) |
+| `outbound_messages` | Every proactive WhatsApp DM Shaul sent on your behalf |
+| `marketing_memory` | Generic key/value cache (e.g. `canva_style_profile`) |
+
+All three are visible in the dashboard memory browser at `http://localhost:3001/memory`.
+
+---
+
 ## Architecture
 
 ```
 greenInoviceAgent_gemini/
-├── agent/               # Node.js WhatsApp agent
-│   └── index.js         # Main entry point
-└── GreenInvoice-MCP-main/  # TypeScript MCP server
+├── agent/                        # Node.js WhatsApp agent
+│   ├── index.js                  # Main router + daily briefing scheduler
+│   ├── noteHandler.js            # Notion integration
+│   ├── personality/shaul.js      # Persona, prompts, copy
+│   └── marketing/                # Phase 2/3 — marketing department
+│       ├── cmo.js                # Orchestrator (CMO) — silent extraction, agenda execution
+│       ├── memory.js             # SQLite long-term memory (14 tables)
+│       ├── meta.js               # Facebook + Instagram Graph API
+│       └── subagents/
+│           ├── common.js         # Shared prompt builder
+│           ├── strategist.js     # Onboarding + silent extraction + dynamic discovery
+│           ├── creative.js       # Copy & image briefs
+│           ├── campaignManager.js
+│           ├── publisher.js      # Pure FB/IG publishing executor (manual-trigger only)
+│           ├── analyst.js        # Insights + weekly reports (correlates with attendance)
+│           ├── mentor.js         # Proactive voice + self-reflection
+│           └── director.js       # Phase 3 — picks next-best actions, runs daily briefings
+└── GreenInvoice-MCP-main/        # TypeScript MCP server
     └── src/
-        ├── index.ts     # MCP server entry
-        ├── client.ts    # GreenInvoice API HTTP client
-        └── tools.ts     # 10 MCP tools (66 API endpoints)
+        ├── index.ts              # MCP server entry
+        ├── client.ts             # GreenInvoice API HTTP client
+        └── tools.ts              # 10 MCP tools (66 API endpoints)
 ```
 
 ### Message Router (`agent/index.js`)
