@@ -11,11 +11,13 @@ An AI-powered WhatsApp agent built around **Shaul** — your Israeli business an
 - [Phase 2: Shaul as Marketing Department](#phase-2-shaul-as-marketing-department)
 - [Phase 3: Shaul as Your Marketing Employee](#phase-3-shaul-as-your-marketing-employee)
 - [Phase 4: Private, Connected Shaul](#phase-4-private-connected-shaul)
+- [Departments & Agents Reference](#departments--agents-reference)
 - [Architecture](#architecture)
 - [File Structure](#file-structure)
 - [Setup — Windows](#setup--windows)
 - [Setup — Android (Termux)](#setup--android-termux)
 - [Environment Variables](#environment-variables)
+- [Notion Memory Setup](#notion-memory-setup)
 - [Adding New Commands](#adding-new-commands)
 - [Adding New MCP Tools](#adding-new-mcp-tools)
 - [Managing the Agent](#managing-the-agent)
@@ -365,6 +367,225 @@ All three are visible in the dashboard memory browser at `http://localhost:3001/
 
 ---
 
+## Departments & Agents Reference
+
+A complete bird's-eye view of every department, sub-agent, tool, and integration in the system.
+
+### Departments
+
+| Department | File | Role |
+|---|---|---|
+| **CMO** | `marketing/cmo.js` | Orchestrator — receives every message, classifies intent, routes to the right sub-agent, enforces approval gates |
+| **Mentor** | `subagents/mentor.js` | Free-text conversation, business advice, grounded in long-term memory; has access to Google Search + send_whatsapp_message |
+| **Strategist** | `subagents/strategist.js` | Onboarding interview; silently mines every message for profile updates, goals, insights, entities, attendance |
+| **Creative** | `subagents/creative.js` | Writes Instagram/Facebook/Story captions, image briefs, hashtags, multiple angle variations |
+| **Campaign Manager** | `subagents/campaignManager.js` | End-to-end campaign planning (objective → audience → budget → content calendar → KPIs → risks) + campaign review |
+| **Publisher** | `subagents/publisher.js` | Pure executor — posts approved content to Meta API; has no autonomy; only runs on explicit approval |
+| **Analyst** | `subagents/analyst.js` | Pulls Meta metrics, writes weekly reports, correlates reach/engagement with workshop attendance |
+| **Director** | `subagents/director.js` | Picks the 5 next-best actions for the user each week; composes the daily morning briefing; maintains the agenda |
+| **Notes** | `noteHandler.js` | Saves ideas to Notion, semantic search, daily/weekly summaries, voice note processing, reminders |
+| **Invoice** | `index.js` → GreenInvoice MCP | Creates invoices, receipts, tax documents; searches clients — all via GreenInvoice API |
+| **Personality** | `personality/shaul.js` | Centralised voice, system prompts, UI copy, greeting templates |
+| **Memory (SQLite)** | `marketing/memory.js` | Fast read/write layer for all long-term state (14 tables) |
+| **Memory (Notion)** | `marketing/notion-memory.js` | Write-through mirror of the 4 human-readable tables to Notion databases |
+
+---
+
+### Sub-Agents in Detail
+
+#### Strategist
+- `startOnboarding()` — 9-step discovery interview
+- `answerOnboarding()` — Processes and saves each answer
+- `proposeProfileUpdates()` — Silent: mines every message for profile/goals/insights/entities/attendance
+- `nextDiscoveryQuestion()` — Picks the highest-value gap question dynamically
+
+#### Creative
+- `draftPost(brief, platform)` — Caption + image brief + hashtags for IG/FB/Story
+- `draftVariations(brief)` — 3+ distinct creative angles for the same brief
+
+#### Campaign Manager
+- `planCampaign(goal)` — Full campaign: objective, audience, channel mix, budget, content calendar, risks
+- `reviewCampaign(id, metricsBundle)` — Audits running campaign vs. KPIs, recommends adjustments
+
+#### Publisher
+- `publishPost(post)` — Executes Meta publish (FB page feed or IG 2-step container)
+- `schedulePost(post, scheduled_at)` — Marks post as scheduled (no publish yet)
+
+#### Analyst
+- `pullDailyInsights(userId)` — Fetches FB Page + IG metrics, stores in `insights_daily`
+- `weeklyReport(userId)` — Synthesises Meta metrics + posts + attendance into plain-Hebrew report
+- `refineCampaign(userId, metricsBundle)` — Proposes concrete adjustments based on live data
+
+#### Director
+- `nextBestActions(userId)` — Decides 5 highest-leverage actions for the week
+- `refreshAgenda(userId)` — Deduplicates and persists new agenda items
+- `composeDailyBriefing(userId)` — One WhatsApp message: 3 top items + call-to-action
+- `maybeRunDailyBriefing(userId)` — Checks if already briefed today, then sends
+
+#### Mentor
+- `mentorReply(userId, message)` — Free-text response grounded in memory + conversation history; can call Google Search and send_whatsapp_message
+- `reflect(userId)` — Reads last 60 interactions + campaigns + insights, distils new learned_insights
+
+---
+
+### All User-Facing Commands
+
+#### Agenda & Control
+| Command | What it does |
+|---|---|
+| `mk go` / `יאללה` | Execute the top agenda item right now |
+| `mk agenda` / *מה יש באג'נדה* | Show pending agenda items |
+| `mk skip [id]` | Defer the top item or a specific post |
+| `mk cleanup` | Remove stale agenda items older than 14 days |
+
+#### Content & Marketing
+| Command | What it does |
+|---|---|
+| `mk post <brief>` / `mk ig` / `mk fb` | Draft an Instagram or Facebook post |
+| `mk plan <goal>` / *תכין קמפיין* | Campaign planner (objective → full plan → approval) |
+| `mk canva <brief>` / *תכין עיצוב* | Canva design: derive style → draft → create → publish |
+| `mk schedule` / `mk calendar` | View scheduled and pending posts |
+
+#### Analytics & Reports
+| Command | What it does |
+|---|---|
+| `mk report` / *תראה דוח* | Weekly plain-Hebrew report (Meta + attendance) |
+| `mk campaigns` | List all campaigns with status |
+| `mk attendance "<label>" <count> [revenue]` | Log workshop headcount and optional revenue |
+
+#### Memory & Learning
+| Command | What it does |
+|---|---|
+| `mk memory` / *מה אתה זוכר עליי* | Show Shaul's full memory context |
+| `mk reflect` | Trigger self-reflection — distils new insights |
+| `mk discovery` / *שאל אותי שאלה* | Ask the single most important unknown question |
+| `mk onboard` | Restart the 9-step discovery interview |
+
+#### Calendar
+| Command | What it does |
+|---|---|
+| `mk today` / *מה יש לי היום* | Google Calendar 24-hour view |
+| `mk meet <details>` / *קבע פגישה* | Create a Google Calendar event |
+
+#### Communication
+| Command | What it does |
+|---|---|
+| `mk dm <client name>` / *כתוב ל...* | Draft + send WhatsApp DM to client (approval required) |
+| `mk briefing` | Generate today's briefing on demand |
+| `mk publish <id>` | Approve and publish a specific post to FB/IG |
+
+#### Notes (Notion)
+| Command | What it does |
+|---|---|
+| `note <text>` | Save an idea to Notion with auto-title and auto-tags |
+| `note search <query>` | Semantic search across all saved notes |
+| `note summary` | Summarise today's notes |
+| `note weekly` | Summarise this week's notes |
+| `note chat <question>` | Ask a question about your saved notes |
+| `note remind <time> <what>` | Set a natural-language reminder |
+
+#### Invoicing (GreenInvoice)
+Triggered automatically by any invoicing intent, or with the legacy `mc` prefix:
+```
+mc צור חשבונית מס קבלה על סך 5000 שח לאגודה שיתופית עשהאל
+mc list all open invoices from this month
+```
+
+---
+
+### Message Flow
+
+```
+WhatsApp message received
+        │
+        ├─ Voice note? ──────────────────────► Voice menu (transcribe / analyze / save)
+        │
+        ├─ Pending intent confirmation? ──────► handleIntentConfirm() → execute
+        │
+        ├─ "help" / "עזרה"? ─────────────────► HELP_TEXT
+        │
+        ├─ Image attachment? ─────────────────► Gemini vision / OCR
+        │
+        ├─ Bare phone number? ───────────────► wa.me link
+        │
+        └─ Any other text
+                │
+                ▼
+        classifyIntent()
+                │
+                ├─ invoice / note_* ──────────► Confirmation menu → execute on approval
+                │
+                └─ general / marketing ───────► CMO (no menu friction)
+                                                       │
+                                          classifyMarketingAction()
+                                                       │
+                                          ┌────────────┴────────────┐
+                                          │                         │
+                                    specific action             none / chat
+                                          │                         │
+                                   dispatch → subagent         Mentor reply
+                                          │                         │
+                                   approval gate             silentExtraction()
+                                          │                  refreshAgenda()
+                                   executeApproved()
+```
+
+**Approval gate pattern** — enforced in code, not by prompt:
+```
+action drafted → setPending(chatId, kind, payload)
+user replies "אישור" / "כן" / "אשר"
+    → takePending(chatId) → executeApproved()
+```
+Every action that publishes to FB/IG, sends a WhatsApp DM to a client, or saves a major plan requires this explicit gate. TTL: 10 minutes.
+
+---
+
+### External Integrations
+
+| Service | Purpose | Required env vars |
+|---|---|---|
+| **Google Gemini** (`gemini-2.5-pro`) | All AI reasoning — every sub-agent | `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| **GreenInvoice MCP** | Invoices, receipts, tax docs, client search | `MCP_SERVER_PATH`, `GREENINVOICE_API_ID`, `GREENINVOICE_API_SECRET` |
+| **Google Calendar MCP** | Read/create calendar events | `CALENDAR_MCP_PATH`, `GOOGLE_*` credentials |
+| **Meta Graph API v21** | Publish to Facebook Page + Instagram Business; pull insights | `META_PAGE_ID`, `META_PAGE_TOKEN`, `IG_BUSINESS_ID` |
+| **Canva Connect REST** | Create and export designs | `CANVA_CLIENT_ID`, `CANVA_CLIENT_SECRET`, `CANVA_REFRESH_TOKEN` |
+| **Notion API** | Save notes (`note` command) + Notion memory mirror | `NOTION_API_KEY`, `NOTION_NOTES_DB_ID`, `NOTION_MEMORY_PARENT_PAGE_ID` |
+| **Gmail IMAP/SMTP** | Parallel email channel (same pipeline as WhatsApp) | `EMAIL_USER`, `EMAIL_PASSWORD` |
+| **WhatsApp Web** | Primary user channel | `ENABLE_WHATSAPP`, `WHATSAPP_PHONE` |
+| **SQLite** | All long-term memory (14 tables, fast reads) | `SHAUL_DB_PATH` (optional, defaults to `agent/data/shaul-memory.db`) |
+
+---
+
+### Memory Tables
+
+#### Synced to Notion (human-readable, editable)
+| Table | Notion database | What it holds |
+|---|---|---|
+| `business_profile` | 🏢 פרופיל עסקי | Business name, industry, offer, ICP, brand voice, budget, channels |
+| `learned_insights` | 💡 תובנות שאול | Distilled lessons with confidence scores (e.g. "user prefers Reels") |
+| `goals` | 🎯 מטרות עסקיות | Active goals with metric, target, and deadline |
+| `agenda_items` | 📋 אג׳נדה שאול | Shaul's todo list for the user — status synced on completion/skip |
+
+#### SQLite only (operational / high-volume)
+| Table | What it holds |
+|---|---|
+| `interactions` | Every user + agent message (short-term context window) |
+| `campaigns` | Planned/active/completed campaigns with full plan JSON |
+| `creatives` | Ad copy, captions, image briefs |
+| `posts` | FB/IG posts with status lifecycle (draft → approved → published) |
+| `insights_daily` | Daily Meta metrics (reach, impressions, engagements, spend) |
+| `attendance` | Workshop headcount + revenue per session |
+| `reflections` | Mentor's weekly self-evaluations |
+| `calendar_events` | Audit trail of Calendar mutations |
+| `outbound_messages` | Every proactive WhatsApp DM sent on your behalf |
+| `marketing_memory` | Generic key/value cache (e.g. `canva_style_profile`, Notion DB IDs) |
+| `discovery_state` | Which discovery hypotheses Shaul has confirmed |
+| `daily_briefings` | One row per day — prevents double-briefing |
+
+All tables are readable in the dashboard at **http://localhost:3001/memory**.
+
+---
+
 ## Architecture
 
 ```
@@ -568,6 +789,36 @@ The `note` command stores your ideas in a Notion database. One-time setup:
    NOTION_API_KEY=secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    NOTION_NOTES_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
+
+---
+
+## Notion Memory Setup
+
+Shaul can mirror 4 key memory tables to Notion so you can view and edit them directly: your business profile, learned insights, goals, and agenda.
+
+**Prerequisites:** `NOTION_API_KEY` already set (same key used for the `note` command).
+
+### Steps
+
+1. **Create a new blank page** in Notion (not a table — a regular page). Name it e.g. `🧠 זיכרון שאול`.
+
+2. **Connect the integration** to that page: open the page → `...` → **Connections** → select your integration.
+
+3. **Add to `agent/.env`:**
+   ```env
+   NOTION_MEMORY_PARENT_PAGE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+   The page ID is the 32-character hex string at the end of the page URL.
+
+4. **Create the databases** (one-time, run from the `agent/` directory):
+   ```bash
+   node scripts/setup-notion-memory.js
+   ```
+   This creates 4 databases under your page: 🏢 פרופיל עסקי, 💡 תובנות שאול, 🎯 מטרות עסקיות, 📋 אג׳נדה שאול.
+
+5. **Restart the agent.** From now on, every profile update, new insight, new goal, and new agenda item is automatically synced to Notion. Agenda status (done / skipped) is synced in real time.
+
+> **Note:** Notion is a write-through mirror — SQLite is still the source of truth for fast reads. A Notion API failure never blocks the agent.
 
 ---
 
