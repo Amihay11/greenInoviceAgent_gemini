@@ -20,6 +20,7 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { mkdirSync, existsSync } from 'fs';
+import * as notionMem from './notion-memory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -298,7 +299,9 @@ export function updateProfile(userId, fields) {
   sets.push(`updated_at = datetime('now')`);
   vals.push(userId);
   getDb().prepare(`UPDATE business_profile SET ${sets.join(', ')} WHERE user_id = ?`).run(...vals);
-  return getProfile(userId);
+  const updated = getProfile(userId);
+  notionMem.syncProfileToNotion(userId, updated).catch(() => {});
+  return updated;
 }
 
 // ── interactions ──────────────────────────────────────────────────────────────
@@ -320,10 +323,12 @@ export function recentInteractions(userId, limit = 20) {
 // ── learned_insights ──────────────────────────────────────────────────────────
 
 export function addInsight({ userId, topic, insight, confidence = 0.6, source = null }) {
-  getDb().prepare(`
+  const info = getDb().prepare(`
     INSERT INTO learned_insights (user_id, topic, insight, confidence, source)
     VALUES (?, ?, ?, ?, ?)
   `).run(userId, topic, insight, confidence, source);
+  const created_at = new Date().toISOString();
+  notionMem.syncInsightToNotion(userId, { id: info.lastInsertRowid, topic, insight, confidence, source, created_at }).catch(() => {});
 }
 
 export function listInsights(userId, limit = 50) {
@@ -474,7 +479,9 @@ export function addGoal({ userId, title, metric = null, target = null, deadline 
   const info = getDb().prepare(`
     INSERT INTO goals (user_id, title, metric, target, deadline) VALUES (?, ?, ?, ?, ?)
   `).run(userId, title, metric, target, deadline);
-  return info.lastInsertRowid;
+  const id = info.lastInsertRowid;
+  notionMem.syncGoalToNotion(userId, { id, title, metric, target, deadline, status: 'active' }).catch(() => {});
+  return id;
 }
 
 export function listGoals(userId, status = 'active') {
@@ -502,7 +509,9 @@ export function addAgendaItem({ userId, title, detail = null, kind = null, prior
     INSERT INTO agenda_items (user_id, title, detail, kind, priority, due_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(userId, title, detail, kind, priority, due_at);
-  return info.lastInsertRowid;
+  const id = info.lastInsertRowid;
+  notionMem.syncAgendaToNotion(userId, { id, title, detail, kind, priority, due_at, status: 'pending' }).catch(() => {});
+  return id;
 }
 
 export function listAgenda(userId, status = 'pending', limit = 20) {
@@ -515,6 +524,8 @@ export function listAgenda(userId, status = 'pending', limit = 20) {
 export function setAgendaStatus(id, status) {
   getDb().prepare(`UPDATE agenda_items SET status = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(status, id);
+  const row = getDb().prepare('SELECT user_id FROM agenda_items WHERE id = ?').get(id);
+  if (row?.user_id) notionMem.syncAgendaStatusToNotion(row.user_id, id, status).catch(() => {});
 }
 
 export function clearStaleAgenda(userId, olderThanDays = 14) {
