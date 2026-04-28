@@ -12,7 +12,7 @@ dotenv.config({ path: join(__dirname, '..', '.env') });
 
 const NOTION_API_KEY            = process.env.NOTION_API_KEY;
 const NOTION_MEMORY_PARENT_PAGE_ID = process.env.NOTION_MEMORY_PARENT_PAGE_ID
-  || '34970767229380468013c31b5390b0f3';
+  || '350707672293809b95d0fac5a010d867';
 
 if (!NOTION_API_KEY) {
   console.error('❌  NOTION_API_KEY is missing from .env');
