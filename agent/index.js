@@ -47,7 +47,22 @@ if (!process.env.MCP_SERVER_PATH) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+
+const DEPRECATED_MODELS = {
+  'gemini-2.0-flash':        'gemini-2.5-flash',
+  'gemini-2.0-flash-exp':    'gemini-2.5-flash',
+  'gemini-2.0-flash-lite':   'gemini-2.5-flash',
+  'gemini-1.5-pro':          'gemini-2.5-pro',
+  'gemini-1.5-pro-latest':   'gemini-2.5-pro',
+  'gemini-1.5-flash':        'gemini-2.5-flash',
+  'gemini-1.5-flash-latest': 'gemini-2.5-flash',
+};
+
+let modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+if (DEPRECATED_MODELS[modelName]) {
+  console.warn(`⚠️  Model '${modelName}' is deprecated or unavailable. Auto-upgrading to '${DEPRECATED_MODELS[modelName]}'.`);
+  modelName = DEPRECATED_MODELS[modelName];
+}
 console.log(`Shaul is running on model: ${modelName}`);
 
 // --- MCP Setup (multi-server) ---
