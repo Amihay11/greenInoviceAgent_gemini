@@ -730,7 +730,7 @@ async function setupEmail() {
   imapClient.on('error', err => {
     console.error('IMAP Client Error:', err.message);
   });
-  
+
   imapClient.on('close', () => {
     console.log('IMAP connection closed. Reconnecting in 5 seconds...');
     setTimeout(() => {
@@ -741,16 +741,18 @@ async function setupEmail() {
     }, 5000);
   });
 
-  // Select INBOX
-  await imapClient.mailboxOpen('INBOX');
-  
-  // Check for any unread messages immediately on start
-  await checkUnreadEmails(imapClient);
-
-  // Listen for new messages
-  imapClient.on('exists', async () => {
-    await checkUnreadEmails(imapClient);
-  });
+  // Run inbox setup in background — do NOT await, so WhatsApp starts immediately
+  (async () => {
+    try {
+      await imapClient.mailboxOpen('INBOX');
+      await checkUnreadEmails(imapClient);
+      imapClient.on('exists', async () => {
+        await checkUnreadEmails(imapClient);
+      });
+    } catch (err) {
+      console.error('IMAP inbox setup failed:', err.message);
+    }
+  })();
 }
 
 async function checkUnreadEmails(imapClient) {
