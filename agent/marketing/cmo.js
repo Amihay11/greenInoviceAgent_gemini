@@ -31,7 +31,7 @@ import * as director from './subagents/director.js';
 import * as meta from './meta.js';
 import * as canva from './canva.js';
 import { lookupClient } from './contacts.js';
-import { buildSystemPrompt } from '../personality/shaul.js';
+import { buildSystemPrompt, buildToolsBlock } from '../personality/shaul.js';
 
 // In-memory pending approvals: chatId → { kind, payload, expiresAt }
 const pendingApprovals = new Map();
@@ -73,12 +73,12 @@ export function hasPendingSendWhatsapp(chatId) {
 
 const GO_RE = /^(יאללה|קדימה|תעבוד|תתחיל|go|do it|let's go|ok do)$/i;
 
-export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient }) {
+export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '' }) {
   const userId = chatId;
   ensureProfile(userId);
   logInteraction({ userId, role: 'user', channel: 'whatsapp', content: text });
 
-  const ctx = { chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient };
+  const ctx = { chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock };
 
   // 1) If user is in onboarding, route there.
   if (onboardingActive.has(chatId)) {
@@ -134,6 +134,7 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName, runG
     ai,
     modelName,
     runGeminiWithTools,
+    toolsBlock,
   });
   const finalReply = reply(userId, replyText);
 
@@ -161,6 +162,9 @@ VOCABULARY (use exactly these "action" values):
 - draft_post_ig           : "כתוב פוסט אינסטגרם", "post about X" → args.brief
 - draft_post_fb           : "כתוב פוסט פייסבוק" → args.brief
 - canva_design            : user explicitly mentions Canva or wants a designed visual → args.brief
+- canva_refresh_style     : user wants to re-analyze ALL their Canva designs to update style profile → no args
+- canva_update_style      : user wants to update style based on ONE specific design by name → args.design_name
+- canva_design_like       : user wants a new post designed like a specific existing design → args.design_name, args.brief
 - weekly_report           : "תן לי דוח שבועי" / "report"
 - briefing                : "תדריך", "briefing"
 - discovery               : "תשאל אותי", "discovery"
@@ -178,6 +182,9 @@ EXAMPLES:
 - "מה יש לי היום ביומן" → {"action":"show_today_schedule"}
 - "מה יש בלוח התוכן" → {"action":"show_calendar"}
 - "תכין עיצוב ב-canva למבצע" → {"action":"canva_design","args":{"brief":"למבצע"}}
+- "רענן סגנון Canva" → {"action":"canva_refresh_style"}
+- "עדכן סגנון לפי פוסט קיץ" → {"action":"canva_update_style","args":{"design_name":"פוסט קיץ"}}
+- "תכין פוסט כמו העיצוב הכהה" → {"action":"canva_design_like","args":{"design_name":"העיצוב הכהה","brief":""}}
 - "שלום מה קורה" → {"action":"none"}
 - "מה דעתך על הקמפיין שלי" → {"action":"none"}
 - "תכתוב לדנה כהן הודעה שתאשר" → {"action":"dm_client","args":{"client_name":"דנה כהן","intent":"שתאשר"}}
@@ -210,29 +217,32 @@ Return ONLY the JSON.`;
 
 // Map a classifier action to the right flow. Re-uses handleMkCommand for the
 // existing actions and dispatches new flows for Phase-4 actions.
-async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, action, args }) {
+async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '', action, args }) {
   const userId = chatId;
   switch (action) {
     case 'go':                  return executeTopAgenda({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient });
     case 'show_agenda':         return showAgenda({ userId, ai, modelName });
     case 'show_memory':         return showMemory({ userId });
     case 'show_calendar':       return showCalendar({ userId });
-    case 'show_today_schedule': return showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools });
+    case 'show_today_schedule': return showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools, toolsBlock });
     case 'show_campaigns':      return showCampaigns({ userId });
     case 'plan_campaign':       return planFlow({ chatId, goal: args.goal || '', ai, modelName });
     case 'draft_post_ig':       return postFlow({ chatId, brief: args.brief || '', platform: 'instagram', ai, modelName });
     case 'draft_post_fb':       return postFlow({ chatId, brief: args.brief || '', platform: 'facebook', ai, modelName });
     case 'canva_design':        return canvaFlow({ chatId, brief: args.brief || '', ai, modelName });
+    case 'canva_refresh_style': return canvaRefreshStyleFlow({ chatId, ai, modelName });
+    case 'canva_update_style':  return canvaUpdateStyleFromDesignFlow({ chatId, designName: args.design_name || '', ai, modelName });
+    case 'canva_design_like':   return canvaDesignLikeFlow({ chatId, designName: args.design_name || '', brief: args.brief || '', ai, modelName });
     case 'weekly_report':       return reportFlow({ userId, ai, modelName });
     case 'briefing':            return briefingFlow({ chatId, ai, modelName });
     case 'discovery':           return discoveryFlow({ chatId, ai, modelName });
     case 'reflect':             return reflectFlow({ userId, ai, modelName });
     case 'publish_post':        return publishCommand({ userId, arg: String(args.id || '') });
     case 'cleanup':             return cleanupCommand({ userId, ai, modelName });
-    case 'schedule_followup':   return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'schedule_followup', args });
-    case 'add_calendar_event':  return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind: 'add_event', args });
+    case 'schedule_followup':   return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, toolsBlock, kind: 'schedule_followup', args });
+    case 'add_calendar_event':  return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, toolsBlock, kind: 'add_event', args });
     case 'meta_insights':       return metaInsightsFlow({ chatId, ai, modelName, args });
-    case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args });
+    case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, toolsBlock, args });
     default:                    return undefined; // unknown — caller falls back to mentor
   }
 }
@@ -626,13 +636,13 @@ ${d.image_brief || '—'}
 // ── Phase 4 flows ────────────────────────────────────────────────────────────
 
 // "What's on my Google Calendar today?" — read-only, no approval needed.
-async function showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools }) {
+async function showTodaySchedule({ chatId, ai, modelName, runGeminiWithTools, toolsBlock = '' }) {
   const userId = chatId;
   if (!runGeminiWithTools) {
     return reply(userId, '⚠️ Calendar לא מוגדר. צריך CALENDAR_MCP_PATH ב-.env.');
   }
   await reply(userId, '📅 מושך מ-Google Calendar...');
-  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general' })}
+  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general', tools: toolsBlock })}
 
 Task: read the user's Google Calendar for the next 24 hours and present it in Hebrew.
 Use the Calendar MCP tools (e.g. list_events / get_events) to fetch events. Format:
@@ -654,14 +664,14 @@ Use the Calendar MCP tools (e.g. list_events / get_events) to fetch events. Form
 
 // schedule_followup / add_calendar_event — Gemini composes a create_event call,
 // returns its proposal as text, and we ask the user to approve.
-async function calendarFlow({ chatId, ai, modelName, runGeminiWithTools, kind, args }) {
+async function calendarFlow({ chatId, ai, modelName, runGeminiWithTools, toolsBlock = '', kind, args }) {
   const userId = chatId;
   if (!runGeminiWithTools) {
     return reply(userId, '⚠️ Calendar לא מוגדר. צריך CALENDAR_MCP_PATH ב-.env.');
   }
   const today = new Date().toISOString().slice(0, 10);
   const argsHint = JSON.stringify(args || {});
-  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general' })}
+  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general', tools: toolsBlock })}
 
 Task: propose a Google Calendar event. TODAY is ${today}.
 - Use the Calendar MCP create_event tool to actually create the event.
@@ -685,7 +695,7 @@ Task: propose a Google Calendar event. TODAY is ${today}.
 // dm_client — look up the client, draft the message, ask for approval BEFORE
 // sending. The local send_whatsapp_message tool is also available so the agent
 // can drive this end-to-end in one Gemini turn.
-async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args }) {
+async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, toolsBlock = '', args }) {
   const userId = chatId;
   if (!runGeminiWithTools) {
     return reply(userId, '⚠️ הסביבה לא מוכנה לשליחת הודעות.');
@@ -717,7 +727,7 @@ async function dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGree
     return reply(userId, `מצאתי את ${c.name} אבל אין לו טלפון תקין במערכת.`);
   }
   const intent = args.intent || 'הודעת המשך';
-  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general' })}
+  const sys = `${buildSystemPrompt({ channel: 'whatsapp', task: 'general', tools: toolsBlock })}
 
 Task: draft and propose sending a WhatsApp message to a CLIENT (not the user).
 - Client: ${c.name} (phone ${c.phone}).
@@ -753,7 +763,9 @@ async function canvaFlow({ chatId, brief, ai, modelName }) {
   await reply(userId, '🎨 מסתכל על העיצובים שלך ב-Canva...');
 
   // 1. Style profile — cached so we don't re-derive on every call.
+  //    Invalidate v1 cache automatically (v2 adds visual analysis fields).
   let styleProfile = getMemory(userId, 'canva_style_profile');
+  if (styleProfile && (styleProfile._schema_version || 1) < 2) styleProfile = null;
   if (!styleProfile) {
     try {
       const designs = await canva.listDesigns({ limit: 8 });
@@ -767,7 +779,7 @@ async function canvaFlow({ chatId, brief, ai, modelName }) {
   // 2. Creative drafts caption + visual brief grounded in style.
   const draft = await creative.draftPost({
     userId, brief, platform: 'instagram', ai, modelName,
-    styleHint: styleProfile?.summary || null,
+    styleHint: formatStyleHint(styleProfile),
   });
   if (!draft) return reply(userId, 'לא הצלחתי לכתוב טיוטה.');
 
@@ -785,38 +797,185 @@ ${styleProfile?.summary ? `\n_סגנון: ${styleProfile.summary.slice(0, 140)}_
 _שלח *אשר* כדי שאצור את העיצוב ב-Canva, או *בטל* כדי לעצור._`);
 }
 
-async function deriveStyleProfile({ userId, designs, ai, modelName }) {
-  if (!Array.isArray(designs) || designs.length === 0) return null;
-  const sample = designs.slice(0, 8).map(d => ({
-    title: d.title || d.name || null,
-    type: d.design_type || d.type || null,
-    thumbnail: d.thumbnail_url || d.thumbnail?.url || null,
-  }));
+async function fetchThumbnailBase64(url) {
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    return {
+      mimeType: res.headers.get('content-type') || 'image/jpeg',
+      data: Buffer.from(buf).toString('base64'),
+    };
+  } catch { return null; }
+}
+
+const STYLE_SCHEMA_HINT = `{
+  "_schema_version": 2,
+  "summary": "1-sentence Hebrew description of the user's typical visual style",
+  "color_palette": "exact colors seen (e.g. 'כחול כהה, לבן, זהב') or null",
+  "typography": "font style observed (bold/thin/serif/sans) or null",
+  "tone": "bold / playful / minimalist / warm / professional",
+  "writing_style": "short/formal/casual, emoji use, sentence length or null",
+  "layout_style": "clean / image-heavy / text-dominant / busy or null",
+  "text_language": "Hebrew / English / mixed or null",
+  "preferred_design_types": ["instagram_post", ...]
+}`;
+
+async function deriveStyleProfileTextOnly({ sample, ai, modelName }) {
   const prompt = `You are deriving the user's visual brand style from their existing Canva designs.
 
 Existing designs (titles + types):
 ${JSON.stringify(sample, null, 2)}
 
 Return ONLY this JSON inside a \`\`\`json fence:
-{
-  "summary": "1-sentence Hebrew description of the user's typical visual style",
-  "color_palette": "comma-separated description (or null)",
-  "typography": "1-line description (or null)",
-  "tone": "1-line — playful / clinical / bold / minimalist etc",
-  "preferred_design_types": ["..."]
-}`;
+${STYLE_SCHEMA_HINT}`;
+  const res = await ai.models.generateContent({
+    model: modelName,
+    contents: [{ parts: [{ text: prompt }] }],
+    config: { temperature: 0.3 },
+  });
+  const raw = res.text || '';
+  const fenced = raw.match(/```json\s*([\s\S]*?)```/i);
+  return JSON.parse((fenced ? fenced[1] : raw).trim());
+}
+
+async function deriveStyleProfile({ userId, designs, ai, modelName }) {
+  if (!Array.isArray(designs) || designs.length === 0) return null;
+  const sample = designs.slice(0, 8).map(d => ({
+    title: d.title || d.name || null,
+    type: d.design_type || d.type || null,
+    thumbnailUrl: d.thumbnail_url || d.thumbnail?.url || null,
+  }));
+
+  // Fetch thumbnails in parallel; failures silently return null.
+  const thumbs = await Promise.all(sample.map(d => fetchThumbnailBase64(d.thumbnailUrl)));
+  const anyLoaded = thumbs.some(Boolean);
+
+  if (!anyLoaded) {
+    try { return await deriveStyleProfileTextOnly({ sample, ai, modelName }); } catch (e) {
+      console.error('[Canva] text-only style profile failed:', e.message);
+      return null;
+    }
+  }
+
+  // Build multimodal parts: text label + inline image per design.
+  const parts = [];
+  parts.push({ text: `Analyze the user's Canva designs visually and derive their brand style.\n\nReturn ONLY this JSON inside a \`\`\`json fence:\n${STYLE_SCHEMA_HINT}\n\nDesigns:` });
+  sample.forEach((d, i) => {
+    parts.push({ text: `\nDesign ${i + 1}: "${d.title || 'untitled'}" (${d.type || 'unknown type'})` });
+    if (thumbs[i]) parts.push({ inlineData: thumbs[i] });
+  });
+
   try {
     const res = await ai.models.generateContent({
       model: modelName,
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts }],
       config: { temperature: 0.3 },
     });
     const raw = res.text || '';
     const fenced = raw.match(/```json\s*([\s\S]*?)```/i);
     return JSON.parse((fenced ? fenced[1] : raw).trim());
   } catch (e) {
-    console.error('[Canva] style profile JSON parse failed:', e.message);
-    return null;
+    console.error('[Canva] multimodal style profile failed, falling back:', e.message);
+    try { return await deriveStyleProfileTextOnly({ sample, ai, modelName }); } catch (_) { return null; }
+  }
+}
+
+function formatStyleHint(p) {
+  if (!p) return null;
+  const parts = [p.summary];
+  if (p.color_palette)  parts.push(`Colors: ${p.color_palette}`);
+  if (p.typography)     parts.push(`Typography: ${p.typography}`);
+  if (p.tone)           parts.push(`Tone: ${p.tone}`);
+  if (p.writing_style)  parts.push(`Writing style: ${p.writing_style}`);
+  if (p.layout_style)   parts.push(`Layout: ${p.layout_style}`);
+  if (p.text_language)  parts.push(`Language in designs: ${p.text_language}`);
+  return parts.filter(Boolean).join('\n');
+}
+
+function findDesignByName(name, designs) {
+  const lower = name.toLowerCase().trim();
+  return (
+    designs.find(d => (d.title || d.name || '').toLowerCase() === lower) ||
+    designs.find(d => (d.title || d.name || '').toLowerCase().includes(lower)) ||
+    null
+  );
+}
+
+// canva_refresh_style — clear cached style and re-derive from all designs.
+async function canvaRefreshStyleFlow({ chatId, ai, modelName }) {
+  if (!canva.isConfigured()) return reply(chatId, '⚠️ Canva לא מוגדר.');
+  setMemory(chatId, 'canva_style_profile', null);
+  await reply(chatId, '🎨 מרענן סגנון מכל העיצובים שלך...');
+  try {
+    const designs = await canva.listDesigns({ limit: 10 });
+    const styleProfile = await deriveStyleProfile({ userId: chatId, designs, ai, modelName });
+    if (styleProfile) {
+      setMemory(chatId, 'canva_style_profile', styleProfile);
+      return reply(chatId, `✅ סגנון עודכן.\n_${styleProfile.summary}_`);
+    }
+    return reply(chatId, '⚠️ לא הצלחתי לנתח את העיצובים.');
+  } catch (e) {
+    return reply(chatId, `❌ שגיאה: ${e.message}`);
+  }
+}
+
+// canva_update_style — derive style from ONE specific design by name.
+async function canvaUpdateStyleFromDesignFlow({ chatId, designName, ai, modelName }) {
+  if (!canva.isConfigured()) return reply(chatId, '⚠️ Canva לא מוגדר.');
+  if (!designName) return reply(chatId, 'תציין שם של עיצוב. למשל: "עדכן סגנון לפי פוסט קיץ".');
+  await reply(chatId, `🎨 מחפש את העיצוב "${designName}"...`);
+  try {
+    const designs = await canva.listDesigns({ limit: 20, query: designName });
+    const match = findDesignByName(designName, designs) || designs[0];
+    if (!match) return reply(chatId, `לא מצאתי עיצוב בשם "${designName}". נסה שם אחר.`);
+    await reply(chatId, `🔍 מנתח את "${match.title || match.name}"...`);
+    const styleProfile = await deriveStyleProfile({ userId: chatId, designs: [match], ai, modelName });
+    if (styleProfile) {
+      setMemory(chatId, 'canva_style_profile', styleProfile);
+      return reply(chatId, `✅ העדפות עודכנו לפי "${match.title || match.name}".\n_${styleProfile.summary}_`);
+    }
+    return reply(chatId, '⚠️ לא הצלחתי לנתח את העיצוב.');
+  } catch (e) {
+    return reply(chatId, `❌ שגיאה: ${e.message}`);
+  }
+}
+
+// canva_design_like — draft a new post inspired by a specific existing design.
+async function canvaDesignLikeFlow({ chatId, designName, brief, ai, modelName }) {
+  if (!canva.isConfigured()) return reply(chatId, '⚠️ Canva לא מוגדר.');
+  if (!designName) return reply(chatId, 'תציין שם של עיצוב. למשל: "תכין פוסט כמו פוסט קיץ".');
+  await reply(chatId, `🎨 מחפש את "${designName}" ב-Canva...`);
+  try {
+    const designs = await canva.listDesigns({ limit: 20, query: designName });
+    const match = findDesignByName(designName, designs) || designs[0];
+    if (!match) {
+      const names = designs.slice(0, 5).map(d => d.title || d.name).filter(Boolean).join('\n  ');
+      return reply(chatId, `לא מצאתי עיצוב בשם "${designName}".\n\nעיצובים זמינים:\n  ${names || '— אין עיצובים —'}`);
+    }
+    await reply(chatId, `🔍 מנתח את הסגנון של "${match.title || match.name}"...`);
+    const oneOffStyle = await deriveStyleProfile({ userId: chatId, designs: [match], ai, modelName });
+    const draft = await creative.draftPost({
+      userId: chatId,
+      brief: brief || `עיצוב בסגנון של "${match.title || match.name}"`,
+      platform: 'instagram',
+      ai, modelName,
+      styleHint: formatStyleHint(oneOffStyle) || formatStyleHint(getMemory(chatId, 'canva_style_profile')),
+    });
+    if (!draft) return reply(chatId, 'לא הצלחתי לכתוב טיוטה.');
+    setPending(chatId, 'canva_create', { draft, styleProfile: oneOffStyle });
+    const designLabel = match.title || match.name;
+    return reply(chatId, `🎨 *טיוטה בסגנון של "${designLabel}":*
+
+*כותרת:* ${draft.headline || '—'}
+*טקסט:* ${draft.body || '—'}
+*וויזואל:* ${draft.image_brief || '—'}
+${oneOffStyle?.summary ? `\n_סגנון: ${oneOffStyle.summary.slice(0, 140)}_` : ''}
+
+_שלח *אשר* לעיצוב ב-Canva, או *בטל*._`);
+  } catch (e) {
+    return reply(chatId, `❌ שגיאה: ${e.message}`);
   }
 }
 
