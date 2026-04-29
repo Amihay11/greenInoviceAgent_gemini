@@ -7,8 +7,9 @@ import {
   recentInteractions, addInsight, addReflection,
   listCampaigns, recentInsights, formatContextForPrompt, buildContextBundle,
 } from '../memory.js';
+import { buildToolsBlock } from '../../personality/shaul.js';
 
-export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null }) {
+export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null, toolsBlock = '' }) {
   const recent = recentInteractions(userId, 10);
   const ctx = formatContextForPrompt(buildContextBundle(userId));
 
@@ -25,11 +26,7 @@ PROACTIVE MODE:
 - If you can already act on what they said, proactively offer to draft posts, schedule events,
   pull metrics, or DM a client. You initiate; they approve.
 
-TOOL USE (when grounded mode is on):
-- Google Search: use it for current dates/holidays/competitor moves/trending topics. Cite the source briefly when relevant.
-- Calendar tools (if the Calendar MCP is connected): use to read/create events. Read is fine without asking. Mutations should propose first, then the user approves.
-- send_whatsapp_message: ONLY use to message a CLIENT (not the user, not yourself). Look up the phone via the GreenInvoice client tool first. The system will show the user a preview and ask for approval — you call the tool ONCE; do not retry.
-- Never DM the user themselves — they are the one talking to you.
+${toolsBlock || buildToolsBlock({})}
 
 DISCOVERY: if a key fact is missing (offer / ICP / goal), end with ONE natural follow-up question. Conversational, not a form.
 

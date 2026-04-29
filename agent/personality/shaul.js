@@ -52,15 +52,60 @@ const TASK_RULES = {
   note_summary: `Task: summarize the user's saved notes for the period given. Organize by theme where useful. Keep it tight; highlight what actually matters.`,
 };
 
+// ── Tool-awareness block ─────────────────────────────────────────────────────
+// Single source of truth for which tools Shaul has. Only includes tools that
+// are actually configured. Pass the result into buildSystemPrompt() via `tools`.
+
+export function buildToolsBlock({
+  hasGreenInvoice = false,
+  hasCalendar     = false,
+  hasCanva        = false,
+  hasMeta         = false,
+  hasNotion       = false,
+} = {}) {
+  const lines = [];
+
+  if (hasGreenInvoice) lines.push(
+    `- *GreenInvoice*: look up clients and their phone numbers, create invoices (types 300/305/320/330). Use it BEFORE messaging a client via WhatsApp.`);
+
+  if (hasCanva) lines.push(
+    `- *Canva*: create branded visuals in the user's exact design style. When drafting any Instagram or Facebook post, proactively offer to build the visual in Canva too. You can also: "עיצוב כמו [שם עיצוב]" to match a specific existing design, "עדכן סגנון לפי [שם]" to update style from one design, "רענן סגנון Canva" to re-analyze all designs.`);
+
+  if (hasMeta) lines.push(
+    `- *Meta (Facebook + Instagram)*: publish posts directly and pull engagement metrics (reach, impressions, likes). After any post draft is approved, always offer to publish. Read metrics without asking — publishing requires explicit "אשר".`);
+
+  if (hasCalendar) lines.push(
+    `- *Google Calendar*: read the user's schedule and create events. Proactively offer to schedule the next step after any business decision or client meeting.`);
+
+  if (hasNotion) lines.push(
+    `- *Notion*: the user's memory (brand profile, goals, insights, saved notes) syncs to Notion automatically. Reference it when the user asks what you remember or wants to review notes.`);
+
+  lines.push(
+    `- *Google Search*: use for Israeli holidays, competitor moves, trending topics, and any fact that benefits from real-time data. Cite the source briefly.`);
+
+  lines.push(
+    `- *send_whatsapp_message*: ONLY to message a CLIENT (never the user themselves). Look up the phone via GreenInvoice first. The system shows a preview and waits for "אשר" — call this tool once per intent, never retry.`);
+
+  // Nudge toward suggesting unconnected high-value tools naturally in conversation.
+  const missing = [];
+  if (!hasCanva) missing.push('Canva (עיצוב מותגי)');
+  if (!hasMeta)  missing.push('Meta (פרסום FB/IG ומדידה)');
+  if (missing.length > 0) lines.push(
+    `- If the user asks about visuals or publishing and those tools aren't connected, mention that ${missing.join(' and ')} can be connected.`);
+
+  return `TOOLS — use proactively, don't wait to be asked:\n${lines.join('\n')}`;
+}
+
 // ── Composed system prompt ───────────────────────────────────────────────────
 
-export function buildSystemPrompt({ channel = 'whatsapp', task = 'general' } = {}) {
+export function buildSystemPrompt({ channel = 'whatsapp', task = 'general', tools = '' } = {}) {
   const parts = [
     IDENTITY,
     VOICE_RULES,
     BILINGUAL_RULE,
     CHANNEL_RULES[channel] || '',
     TASK_RULES[task] || '',
+    tools || '',
   ].filter(Boolean);
   return parts.join('\n\n');
 }
@@ -130,11 +175,16 @@ export const HELP_TEXT = `🤖 *שאול — יועץ עסקי ושיווקי*
 📣 *שיווק* — דוגמאות בעברית חופשית:
   "תכין לי קמפיין לקיץ"
   "כתוב פוסט אינסטגרם על המבצע"
-  "תכין עיצוב ב-Canva בסגנון שלי"
   "תראה לי איך הקמפיין רץ"
   "מה אתה זוכר עליי"
   "מה באג'נדה"
   "יאללה"          — אתחיל מהדבר הראשון
+
+🎨 *Canva* — עיצוב בסגנון שלך:
+  "תכין עיצוב ב-Canva על המבצע"
+  "עיצוב כמו [שם עיצוב]"   — פוסט בסגנון של עיצוב ספציפי
+  "עדכן סגנון לפי [שם]"    — עדכן את העדפות העיצוב שלי
+  "רענן סגנון Canva"        — נתח מחדש את כל העיצובים
 
 📅 *יומן* — דוגמאות:
   "מה יש לי היום"
@@ -151,6 +201,13 @@ export const HELP_TEXT = `🤖 *שאול — יועץ עסקי ושיווקי*
 
 📱 *קישור WhatsApp* — שלח מספר טלפון בלבד
 🤖 *שאלה ישירה* — תמיד אפשר לשאול / לשלוח תמונה ל-OCR
+
+🔌 *כלים שאפשר לחבר בעתיד:*
+  Bitly       — קיצור קישורים אוטומטי בפוסטים
+  Brevo       — קמפיין אימייל + SMS לרשימת הלקוחות
+  Fal.ai      — יצירת תמונות AI לפוסטים ללא Canva
+  Cal.com     — עמוד הזמנות לסדנאות ופגישות
+  Google Analytics — מעקב תנועה לאתר מהפוסטים
 
 _פקודות mk עדיין עובדות לאחור-תאימות (mk help)._
 

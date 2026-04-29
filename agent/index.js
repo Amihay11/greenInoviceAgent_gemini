@@ -16,6 +16,7 @@ import {
 } from './noteHandler.js';
 import {
   buildSystemPrompt,
+  buildToolsBlock,
   GREETING_HE,
   EMAIL_GREETING_HE,
   READY_MESSAGE,
@@ -47,6 +48,16 @@ if (!process.env.MCP_SERVER_PATH) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// Computed once at startup — which tools are active drives both the system
+// prompt and Shaul's proactive tool suggestions in conversation.
+const TOOLS_BLOCK = buildToolsBlock({
+  hasGreenInvoice: Boolean(process.env.MCP_SERVER_PATH),
+  hasCalendar:     Boolean(process.env.CALENDAR_MCP_PATH),
+  hasCanva:        Boolean(process.env.CANVA_CLIENT_ID && process.env.CANVA_CLIENT_SECRET && process.env.CANVA_REFRESH_TOKEN),
+  hasMeta:         Boolean(process.env.META_PAGE_TOKEN && (process.env.META_PAGE_ID || process.env.IG_BUSINESS_ID)),
+  hasNotion:       Boolean(process.env.NOTION_API_KEY && process.env.NOTION_MEMORY_PARENT_PAGE_ID),
+});
 
 const DEPRECATED_MODELS = {
   'gemini-2.0-flash':        'gemini-2.5-flash',
@@ -404,6 +415,7 @@ async function handleMkRouted(originalMsg, msgText, ai, modelName, waClient) {
       runGeminiWithTools,
       getGreenInvoiceClient,
       waClient,
+      toolsBlock: TOOLS_BLOCK,
     });
     if (reply) await waClient.sendMessage(originalMsg.from, reply);
   } catch (err) {
@@ -452,7 +464,7 @@ async function handleMorningCommand(msg) {
       chatId: msg.from,
       history,
       message: msg.body,
-      systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'invoice' }),
+      systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'invoice', tools: TOOLS_BLOCK }),
     });
 
     chatHistories.set(msg.from, updatedHistory);
@@ -492,7 +504,7 @@ async function handleGcCommand(msg) {
       model: modelName,
       contents: [{ parts }],
       config: {
-        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'general' })
+        systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'general', tools: TOOLS_BLOCK })
       }
     });
     await client.sendMessage(msg.from, result.text || "No response generated.");
@@ -734,7 +746,7 @@ async function processEmailMessage(sender, subject, text) {
       chatId: sender,
       history,
       message: `Subject: ${subject}\n\n${text}`,
-      systemInstruction: buildSystemPrompt({ channel: 'email', task: 'invoice' }),
+      systemInstruction: buildSystemPrompt({ channel: 'email', task: 'invoice', tools: TOOLS_BLOCK }),
     });
 
     emailHistories.set(sender, updatedHistory);
