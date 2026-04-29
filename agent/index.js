@@ -60,13 +60,9 @@ const TOOLS_BLOCK = buildToolsBlock({
 });
 
 const DEPRECATED_MODELS = {
-  'gemini-2.0-flash':        'gemini-2.5-flash',
-  'gemini-2.0-flash-exp':    'gemini-2.5-flash',
-  'gemini-2.0-flash-lite':   'gemini-2.5-flash',
-  'gemini-1.5-pro':          'gemini-2.5-pro',
-  'gemini-1.5-pro-latest':   'gemini-2.5-pro',
-  'gemini-1.5-flash':        'gemini-2.5-flash',
-  'gemini-1.5-flash-latest': 'gemini-2.5-flash',
+  'gemini-1.5-pro':          'gemini-1.5-pro',
+  'gemini-1.5-flash':        'gemini-1.5-flash',
+  'gemini-2.0-flash-exp':    'gemini-2.0-flash',
 };
 
 let modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
@@ -256,10 +252,9 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
     model: modelName,
     history,
     config: {
-      tools: [
-        { functionDeclarations: declarations },
-        { googleSearch: {} },
-      ],
+      tools: declarations.length > 0 
+        ? [{ functionDeclarations: declarations }] 
+        : [{ googleSearch: {} }],
       systemInstruction,
     },
   });
@@ -640,31 +635,49 @@ async function handleHelpCommand(msg) {
 let emailTransporter;
 const emailHistories = new Map();
 
+function isEmailConfigured() {
+  return Boolean(
+    process.env.GMAIL_USER &&
+    process.env.GMAIL_CLIENT_ID &&
+    process.env.GMAIL_CLIENT_SECRET &&
+    process.env.GMAIL_REFRESH_TOKEN
+  );
+}
+
 async function setupEmail() {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-    console.log("Email credentials not set. Skipping Email agent setup. Set EMAIL_PASSWORD in .env to enable.");
+  if (!isEmailConfigured()) {
+    console.log("Gmail OAuth2 credentials not set. Skipping Email agent setup. Run agent/scripts/gmail-oauth.js to configure.");
     return;
   }
 
-  // Set up SMTP for sending replies
+  const { google } = await import('googleapis');
+  const oAuth2Client = new google.auth.OAuth2(
+    process.env.GMAIL_CLIENT_ID,
+    process.env.GMAIL_CLIENT_SECRET,
+  );
+  oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+
+  // Set up SMTP for sending via OAuth2 — no password stored
   emailTransporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
+    service: 'gmail',
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    }
+      type: 'OAuth2',
+      user: process.env.GMAIL_USER,
+      clientId: process.env.GMAIL_CLIENT_ID,
+      clientSecret: process.env.GMAIL_CLIENT_SECRET,
+      refreshToken: process.env.GMAIL_REFRESH_TOKEN,
+    },
   });
 
-  // Set up IMAP for listening
+  // Set up IMAP for listening via OAuth2
+  const { token } = await oAuth2Client.getAccessToken();
   const imapClient = new ImapFlow({
     host: 'imap.gmail.com',
     port: 993,
     secure: true,
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
+      user: process.env.GMAIL_USER,
+      accessToken: token,
     },
     logger: false
   });
@@ -753,7 +766,7 @@ async function processEmailMessage(sender, subject, text) {
     
     // Reply via Email
     await emailTransporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: process.env.GMAIL_USER,
       to: sender,
       subject: `Re: ${subject}`,
       text: finalResponse
