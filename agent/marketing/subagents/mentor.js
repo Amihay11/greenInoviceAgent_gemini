@@ -52,6 +52,7 @@ Reply now (no JSON, just the message). If you need real-time info or to take act
         message: userText,
         systemInstruction,
         includeSendWhatsapp: true,
+        includeSendEmail: true,
       });
       return (text || '').trim();
     } catch (err) {

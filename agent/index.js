@@ -169,6 +169,44 @@ function getGreenInvoiceClient() {
   return entry?.client || null;
 }
 
+// --- Local function-tool: send_email ---
+const SEND_EMAIL_DECL = {
+  name: 'send_email',
+  description: 'Send an email from ortaladler5@gmail.com to one recipient. Use for outbound marketing emails, follow-ups, and campaign outreach. Always show the user what you are about to send and get confirmation first — unless the user explicitly said "שלח עכשיו" or "תשלח".',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      to:      { type: 'STRING', description: 'Recipient email address.' },
+      subject: { type: 'STRING', description: 'Email subject line.' },
+      body:    { type: 'STRING', description: 'Plain-text email body.' },
+    },
+    required: ['to', 'subject', 'body'],
+  },
+};
+
+async function handleSendEmailLocal({ args }) {
+  const { to, subject, body } = args || {};
+  if (!to || !subject || !body) {
+    return { status: 'error', error: 'Missing to/subject/body' };
+  }
+  if (!emailTransporter) {
+    return { status: 'error', error: 'Gmail not configured — run agent/scripts/gmail-oauth.js first.' };
+  }
+  try {
+    await emailTransporter.sendMail({
+      from: process.env.GMAIL_USER,
+      to,
+      subject,
+      text: body,
+    });
+    console.log(`[email] Sent to ${to} — "${subject}"`);
+    return { status: 'sent', to, subject };
+  } catch (err) {
+    console.error('[email] Send failed:', err.message);
+    return { status: 'error', error: err.message };
+  }
+}
+
 // --- Local function-tool: send_whatsapp_message ---
 // Approval-gated: when Gemini calls this, we DO NOT send. We register the
 // pending approval in cmo.js and wait for the user to type אשר/בטל. The user's
@@ -244,9 +282,10 @@ function maybeLogCalendarMutation({ chatId, toolName, args, response }) {
   }
 }
 
-async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false }) {
+async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false, includeSendEmail = false }) {
   const declarations = [...mcpTools, ...extraTools];
   if (includeSendWhatsapp) declarations.push(SEND_WHATSAPP_DECL);
+  if (includeSendEmail && isEmailConfigured()) declarations.push(SEND_EMAIL_DECL);
 
   const chat = ai.chats.create({
     model: modelName,
@@ -268,6 +307,8 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
     try {
       if (fc.name === 'send_whatsapp_message') {
         response = await handleSendWhatsappLocal({ chatId, args: fc.args || {} });
+      } else if (fc.name === 'send_email') {
+        response = await handleSendEmailLocal({ args: fc.args || {} });
       } else {
         const c = toolToClientMap.get(fc.name);
         if (!c) throw new Error(`No MCP client registered for tool: ${fc.name}`);
