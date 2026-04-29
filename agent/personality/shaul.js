@@ -62,6 +62,7 @@ export function buildToolsBlock({
   hasCanva        = false,
   hasMeta         = false,
   hasNotion       = false,
+  hasEmail        = false,
 } = {}) {
   const lines = [];
 
@@ -85,6 +86,9 @@ export function buildToolsBlock({
 
   lines.push(
     `- *send_whatsapp_message*: ONLY to message a CLIENT (never the user themselves). Look up the phone via GreenInvoice first. The system shows a preview and waits for "אשר" — call this tool once per intent, never retry.`);
+
+  if (hasEmail) lines.push(
+    `- *send_email*: send an email FROM ortaladler5@gmail.com to any recipient. Use for outbound marketing, lead outreach, follow-ups, and campaign emails. You CAN and SHOULD use this when the user asks to send an email. Call it directly — it sends immediately.`);
 
   // Nudge toward suggesting unconnected high-value tools naturally in conversation.
   const missing = [];

@@ -57,6 +57,7 @@ const TOOLS_BLOCK = buildToolsBlock({
   hasCanva:        Boolean(process.env.CANVA_CLIENT_ID && process.env.CANVA_CLIENT_SECRET && process.env.CANVA_REFRESH_TOKEN),
   hasMeta:         Boolean(process.env.META_PAGE_TOKEN && (process.env.META_PAGE_ID || process.env.IG_BUSINESS_ID)),
   hasNotion:       Boolean(process.env.NOTION_API_KEY && process.env.NOTION_MEMORY_PARENT_PAGE_ID),
+  hasEmail:        Boolean(process.env.GMAIL_USER && process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN),
 });
 
 const DEPRECATED_MODELS = {
