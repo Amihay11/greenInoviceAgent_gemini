@@ -9,7 +9,7 @@ import {
 } from '../memory.js';
 import { buildToolsBlock } from '../../personality/shaul.js';
 
-export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null, toolsBlock = '' }) {
+export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null, toolsBlock = '', sessionHistory = [] }) {
   const recent = recentInteractions(userId, 10);
   const ctx = formatContextForPrompt(buildContextBundle(userId));
 
@@ -48,7 +48,7 @@ Reply now (no JSON, just the message). If you need real-time info or to take act
     try {
       const { text } = await runGeminiWithTools({
         chatId: userId,
-        history: [],
+        history: sessionHistory,
         message: userText,
         systemInstruction,
         includeSendWhatsapp: true,
