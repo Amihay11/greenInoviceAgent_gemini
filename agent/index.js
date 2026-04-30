@@ -442,7 +442,10 @@ async function executeIntent(intent, msgText, originalMsg, ai, modelName, waClie
   }
 }
 
+const MAX_MK_HISTORY = 20; // keep last 10 user+model turns
+
 async function handleMkRouted(originalMsg, msgText, ai, modelName, waClient) {
+  const sessionHistory = chatHistories.get(originalMsg.from) || [];
   try {
     const reply = await handleMarketingMessage({
       chatId: originalMsg.from,
@@ -453,8 +456,18 @@ async function handleMkRouted(originalMsg, msgText, ai, modelName, waClient) {
       getGreenInvoiceClient,
       waClient,
       toolsBlock: TOOLS_BLOCK,
+      sessionHistory,
     });
-    if (reply) await waClient.sendMessage(originalMsg.from, reply);
+    if (reply) {
+      // Maintain a rolling session window so the next turn has context.
+      const updated = [
+        ...sessionHistory,
+        { role: 'user', parts: [{ text: msgText }] },
+        { role: 'model', parts: [{ text: reply }] },
+      ].slice(-MAX_MK_HISTORY);
+      chatHistories.set(originalMsg.from, updated);
+      await waClient.sendMessage(originalMsg.from, reply);
+    }
   } catch (err) {
     console.error('Marketing handler error:', err);
     await waClient.sendMessage(originalMsg.from, `שגיאה במחלקת השיווק: ${err.message}`);

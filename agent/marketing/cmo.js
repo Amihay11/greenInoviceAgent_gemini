@@ -73,7 +73,7 @@ export function hasPendingSendWhatsapp(chatId) {
 
 const GO_RE = /^(יאללה|קדימה|תעבוד|תתחיל|go|do it|let's go|ok do)$/i;
 
-export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '' }) {
+export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '', sessionHistory = [] }) {
   const userId = chatId;
   ensureProfile(userId);
   logInteraction({ userId, role: 'user', channel: 'whatsapp', content: text });
@@ -135,6 +135,7 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName, runG
     modelName,
     runGeminiWithTools,
     toolsBlock,
+    sessionHistory,
   });
   const finalReply = reply(userId, replyText);
 
@@ -175,6 +176,7 @@ VOCABULARY (use exactly these "action" values):
 - add_calendar_event      : like schedule_followup but generic event → args.title, args.when, args.duration
 - meta_insights           : "תראה לי איך הקמפיין רץ", "how is the campaign performing"
 - dm_client               : user asks Shaul to message a CLIENT (not the user) → args.client_name, args.intent
+- share_canva_design      : user asks for the Canva design link, or asks to send/share the design (by email, link, etc.) → args.email (optional)
 
 EXAMPLES:
 - "מה אתה זוכר עליי" → {"action":"show_memory"}
@@ -182,6 +184,9 @@ EXAMPLES:
 - "מה יש לי היום ביומן" → {"action":"show_today_schedule"}
 - "מה יש בלוח התוכן" → {"action":"show_calendar"}
 - "תכין עיצוב ב-canva למבצע" → {"action":"canva_design","args":{"brief":"למבצע"}}
+- "תשלח לי את העיצוב מקנבה" → {"action":"share_canva_design","args":{}}
+- "שלח את העיצוב למייל שלי" → {"action":"share_canva_design","args":{"email":"..."}}
+- "קישור לעיצוב בקנבה" → {"action":"share_canva_design","args":{}}
 - "רענן סגנון Canva" → {"action":"canva_refresh_style"}
 - "עדכן סגנון לפי פוסט קיץ" → {"action":"canva_update_style","args":{"design_name":"פוסט קיץ"}}
 - "תכין פוסט כמו העיצוב הכהה" → {"action":"canva_design_like","args":{"design_name":"העיצוב הכהה","brief":""}}
@@ -243,6 +248,7 @@ async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGr
     case 'add_calendar_event':  return calendarFlow({ chatId, ai, modelName, runGeminiWithTools, toolsBlock, kind: 'add_event', args });
     case 'meta_insights':       return metaInsightsFlow({ chatId, ai, modelName, args });
     case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, toolsBlock, args });
+    case 'share_canva_design':  return shareCanvaDesignFlow({ chatId, args });
     default:                    return undefined; // unknown — caller falls back to mentor
   }
 }
@@ -979,6 +985,22 @@ _שלח *אשר* לעיצוב ב-Canva, או *בטל*._`);
   }
 }
 
+// share_canva_design — retrieve the last created design's Canva link from memory
+// and either send it inline or email it to the requested address.
+async function shareCanvaDesignFlow({ chatId, args }) {
+  const userId = chatId;
+  const lastDesign = getMemory(userId, 'last_canva_design');
+  if (!lastDesign?.view_url) {
+    return reply(userId, 'לא מצאתי עיצוב Canva שמור. צור עיצוב קודם עם "תכין עיצוב ב-Canva".');
+  }
+  const { title, view_url } = lastDesign;
+  const email = args?.email || null;
+  if (email) {
+    return reply(userId, `🔗 *${title || 'עיצוב Canva'}*\nקישור לעיצוב: ${view_url}\n\nאם תרצה שאשלח את הקישור הזה למייל ${email}, שלח לי אישור.`);
+  }
+  return reply(userId, `🔗 *${title || 'עיצוב Canva'}*\nהנה הקישור לעיצוב שלך ב-Canva:\n${view_url}`);
+}
+
 // meta_insights — pull latest Page+IG metrics and let the Analyst propose a
 // refined plan (presented as draft for approval, then queued by Director on go).
 async function metaInsightsFlow({ chatId, ai, modelName, args }) {
@@ -1052,12 +1074,27 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
     const { draft, styleProfile } = payload;
     await reply(userId, '🎨 יוצר ב-Canva...');
     let exportResult;
+    let designViewUrl = null;
+    let designTitle = null;
     try {
-      const design = await canva.createDesign({
+      const designResp = await canva.createDesign({
         title: draft.headline || (draft.body || 'Shaul design').slice(0, 40),
         styleProfile,
       });
-      exportResult = await canva.exportDesign(design.id);
+      // Canva API wraps the design under a "design" key: { design: { id, urls: { view_url, edit_url } } }
+      const designObj = designResp?.design || designResp;
+      const designId = designObj?.id;
+      designViewUrl = designObj?.urls?.view_url || designObj?.view_url || null;
+      designTitle = designObj?.title || draft.headline || 'עיצוב Canva';
+      if (!designId) throw new Error('Canva לא החזיר ID לעיצוב');
+      // Persist so the user can ask for the link later in any message.
+      setMemory(userId, 'last_canva_design', {
+        id: designId,
+        title: designTitle,
+        view_url: designViewUrl,
+        created_at: new Date().toISOString(),
+      });
+      exportResult = await canva.exportDesign(designId);
     } catch (e) {
       return reply(userId, `❌ Canva נכשל: ${e.message}`);
     }
@@ -1065,8 +1102,9 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
     if (!imageUrl) {
       return reply(userId, '⚠️ Canva לא החזיר תמונה. נסה שוב.');
     }
-    setPending(chatId, 'canva_publish', { draft, imageUrl });
-    return reply(userId, `✅ העיצוב מוכן.\n${imageUrl}\n\nלפרסם לאינסטגרם? *אשר* / *בטל*.`);
+    setPending(chatId, 'canva_publish', { draft, imageUrl, designViewUrl });
+    const linkLine = designViewUrl ? `\n🔗 קישור לעיצוב ב-Canva: ${designViewUrl}` : '';
+    return reply(userId, `✅ העיצוב מוכן! *${designTitle}*${linkLine}\n\nלפרסם לאינסטגרם? *אשר* / *בטל*.`);
   }
 
   if (kind === 'canva_publish') {
