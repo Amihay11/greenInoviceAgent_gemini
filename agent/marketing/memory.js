@@ -264,6 +264,21 @@ function initSchema(db) {
       PRIMARY KEY (user_id, key)
     );
   `);
+
+  // Phase 5: anti-nag columns on agenda_items (idempotent migration).
+  const agendaCols = db.prepare("PRAGMA table_info(agenda_items)").all().map(c => c.name);
+  if (!agendaCols.includes('last_mentioned_at')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN last_mentioned_at TEXT`);
+  }
+  if (!agendaCols.includes('mute_until')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN mute_until TEXT`);
+  }
+  if (!agendaCols.includes('nudge_count')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN nudge_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!agendaCols.includes('topic')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN topic TEXT`);
+  }
 }
 
 // ── business_profile ──────────────────────────────────────────────────────────
@@ -528,11 +543,72 @@ export function setAgendaStatus(id, status) {
   if (row?.user_id) notionMem.syncAgendaStatusToNotion(row.user_id, id, status).catch(() => {});
 }
 
-export function clearStaleAgenda(userId, olderThanDays = 14) {
+export function clearStaleAgenda(userId, olderThanDays = 7) {
   getDb().prepare(`
     DELETE FROM agenda_items WHERE user_id = ? AND status = 'pending'
     AND created_at < datetime('now', ?)
   `).run(userId, `-${olderThanDays} days`);
+}
+
+export function bumpAgendaNudge(id) {
+  getDb().prepare(`
+    UPDATE agenda_items
+    SET nudge_count = nudge_count + 1, last_mentioned_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ?
+  `).run(id);
+}
+
+export function setAgendaMute(id, untilIso) {
+  getDb().prepare(`
+    UPDATE agenda_items SET mute_until = ?, updated_at = datetime('now') WHERE id = ?
+  `).run(untilIso, id);
+}
+
+export function setAgendaMuteByTopic(userId, topic, days) {
+  const until = new Date(Date.now() + days * 86400_000).toISOString();
+  getDb().prepare(`
+    UPDATE agenda_items SET mute_until = ?, updated_at = datetime('now')
+    WHERE user_id = ? AND topic = ? AND status = 'pending'
+  `).run(until, userId, topic);
+}
+
+export function setAgendaTopic(id, topic) {
+  getDb().prepare(`UPDATE agenda_items SET topic = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(topic, id);
+}
+
+// Returns eligible agenda items after applying cooldown + staleness + topic filter.
+// cooldownHours = 24 * 2^min(nudge_count, 4)  (24h → 48h → 96h → 192h → 384h)
+export function listEligibleAgenda(userId, currentTopic = null, limit = 3) {
+  const now = new Date().toISOString();
+  const items = getDb().prepare(`
+    SELECT * FROM agenda_items
+    WHERE user_id = ? AND status = 'pending'
+      AND (mute_until IS NULL OR mute_until < ?)
+    ORDER BY priority ASC, COALESCE(due_at, '9999-12-31'), created_at
+    LIMIT 20
+  `).all(userId, now);
+
+  const eligible = [];
+  for (const item of items) {
+    const nudges = item.nudge_count || 0;
+    const cooldownHours = 24 * Math.pow(2, Math.min(nudges, 4));
+    const cooldownMs = cooldownHours * 3600_000;
+    const lastMentioned = item.last_mentioned_at ? new Date(item.last_mentioned_at).getTime() : 0;
+    if (Date.now() - lastMentioned < cooldownMs) continue;
+
+    // Staleness decay: 0.5^(age_days/7) * priority/10 — drop below 0.1
+    const ageDays = (Date.now() - new Date(item.created_at).getTime()) / 86400_000;
+    const salience = Math.pow(0.5, ageDays / 7) * ((item.priority || 5) / 10);
+    if (salience < 0.1) continue;
+
+    // Topic filter: suppress if current topic is known and doesn't match item topic
+    if (currentTopic && item.topic && item.topic !== currentTopic) continue;
+
+    eligible.push(item);
+    if (eligible.length >= limit) break;
+  }
+  return eligible;
 }
 
 // ── attendance ───────────────────────────────────────────────────────────────

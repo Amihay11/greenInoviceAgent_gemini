@@ -18,6 +18,7 @@ import {
   recentInsights, listGoals, addGoal,
   addInsight, upsertEntity, logAttendance, recentAttendance,
   listAgenda, addAgendaItem, setAgendaStatus,
+  bumpAgendaNudge, setAgendaMute, setAgendaMuteByTopic,
   buildContextBundle, formatContextForPrompt,
   logOutboundMessage, recentCalendarEvents, getMemory, setMemory,
 } from './memory.js';
@@ -37,6 +38,10 @@ import { buildSystemPrompt, buildToolsBlock } from '../personality/shaul.js';
 const pendingApprovals = new Map();
 // Active onboarding sessions: chatId → true
 const onboardingActive = new Set();
+// Proactivity budget: chatId → count of proactive nudges sent today (resets at midnight)
+const proactivityBudget = new Map();
+let proactivityBudgetDay = new Date().toISOString().slice(0, 10);
+const MAX_PROACTIVE_PER_DAY = 3;
 
 const APPROVAL_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -139,6 +144,9 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName, runG
   });
   const finalReply = reply(userId, replyText);
 
+  // Post-processor: bump nudge counts for agenda items referenced in this reply.
+  bumpMentionedAgendaItems(userId, replyText);
+
   // Fire-and-forget background work: extract structured data + refresh agenda.
   silentExtraction({ userId, userMessage: text, ai, modelName })
     .catch(err => console.error('[CMO] silent extraction failed:', err.message));
@@ -177,6 +185,10 @@ VOCABULARY (use exactly these "action" values):
 - meta_insights           : "תראה לי איך הקמפיין רץ", "how is the campaign performing"
 - dm_client               : user asks Shaul to message a CLIENT (not the user) → args.client_name, args.intent
 - share_canva_design      : user asks for the Canva design link, or asks to send/share the design (by email, link, etc.) → args.email (optional)
+- snooze_agenda           : user wants to snooze/defer a specific agenda item by id or title → args.id (number or null), args.title (string or null), args.days (number, default 3)
+- mute_topic              : user wants to stop hearing about a whole topic for a while → args.topic (string), args.days (number, default 7)
+- done_agenda             : user marks an agenda item as done manually → args.id (number or null), args.title (string or null)
+- pin_fact                : user wants to pin a key fact for Shaul to always remember → args.key (string), args.value (string)
 
 EXAMPLES:
 - "מה אתה זוכר עליי" → {"action":"show_memory"}
@@ -194,6 +206,11 @@ EXAMPLES:
 - "מה דעתך על הקמפיין שלי" → {"action":"none"}
 - "תכתוב לדנה כהן הודעה שתאשר" → {"action":"dm_client","args":{"client_name":"דנה כהן","intent":"שתאשר"}}
 - "what about scheduling a follow-up with David tuesday" → {"action":"schedule_followup","args":{"who":"David","when":"tuesday"}}
+- "תעזוב את הפוסט לפייסבוק" → {"action":"snooze_agenda","args":{"title":"הפוסט לפייסבוק","days":3}}
+- "snooze 7" → {"action":"snooze_agenda","args":{"id":7,"days":3}}
+- "תפסיק להזכיר לי על תקציב" → {"action":"mute_topic","args":{"topic":"budget","days":7}}
+- "סיימתי עם פוסט 5" → {"action":"done_agenda","args":{"id":5}}
+- "שמור שהלקוח המועדף הוא ב2ב" → {"action":"pin_fact","args":{"key":"לקוח מועדף","value":"ב2ב"}}
 
 Schema: {"action": "<one of the above>", "args": { ... }}
 
@@ -249,6 +266,10 @@ async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGr
     case 'meta_insights':       return metaInsightsFlow({ chatId, ai, modelName, args });
     case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, toolsBlock, args });
     case 'share_canva_design':  return shareCanvaDesignFlow({ chatId, args });
+    case 'snooze_agenda':       return snoozeAgendaFlow({ userId, args });
+    case 'mute_topic':          return muteTopicFlow({ userId, args });
+    case 'done_agenda':         return doneAgendaFlow({ userId, args });
+    case 'pin_fact':            return pinFactFlow({ userId, args });
     default:                    return undefined; // unknown — caller falls back to mentor
   }
 }
@@ -301,6 +322,18 @@ async function silentExtraction({ userId, userMessage, ai, modelName }) {
 
   // After extraction, refresh the agenda so Director surfaces new actions.
   try { await director.refreshAgenda({ userId, ai, modelName }); } catch (_) {}
+}
+
+// Bump nudge count on any pending agenda item whose title appears in the reply.
+function bumpMentionedAgendaItems(userId, replyText) {
+  if (!replyText) return;
+  const items = listAgenda(userId, 'pending', 20);
+  const lower = replyText.toLowerCase();
+  for (const item of items) {
+    const words = item.title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const matched = words.length > 0 && words.some(w => lower.includes(w));
+    if (matched) bumpAgendaNudge(item.id);
+  }
 }
 
 function maybeMarkOnboardingDone(userId) {
@@ -1332,4 +1365,80 @@ export async function processScheduledPosts() {
     });
   }
   return nudges;
+}
+
+// ── Proactivity budget ────────────────────────────────────────────────────────
+
+export function canSendProactive(chatId) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== proactivityBudgetDay) {
+    proactivityBudget.clear();
+    proactivityBudgetDay = today;
+  }
+  return (proactivityBudget.get(chatId) || 0) < MAX_PROACTIVE_PER_DAY;
+}
+
+export function consumeProactiveBudget(chatId) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== proactivityBudgetDay) {
+    proactivityBudget.clear();
+    proactivityBudgetDay = today;
+  }
+  proactivityBudget.set(chatId, (proactivityBudget.get(chatId) || 0) + 1);
+}
+
+// ── Snooze / mute / done / pin flows ──────────────────────────────────────────
+
+function snoozeAgendaFlow({ userId, args }) {
+  const days = Number(args?.days) || 3;
+  const until = new Date(Date.now() + days * 86400_000).toISOString();
+
+  if (args?.id) {
+    setAgendaMute(Number(args.id), until);
+    return reply(userId, `בסדר, נדחה ל-${days} ימים.`);
+  }
+  if (args?.title) {
+    const items = listAgenda(userId, 'pending', 50);
+    const match = items.find(a => a.title.includes(args.title));
+    if (match) {
+      setAgendaMute(match.id, until);
+      return reply(userId, `בסדר, נדחה ל-${days} ימים.`);
+    }
+  }
+  return reply(userId, 'לא מצאתי פריט כזה באג\'נדה. נסה "snooze <מספר>".');
+}
+
+function muteTopicFlow({ userId, args }) {
+  const days = Number(args?.days) || 7;
+  const topic = String(args?.topic || '');
+  if (!topic) return reply(userId, 'לא ברור איזה נושא לדמם. נסה שוב.');
+  setAgendaMuteByTopic(userId, topic, days);
+  return reply(userId, `לא אזכיר לך על "${topic}" ב-${days} הימים הקרובים.`);
+}
+
+function doneAgendaFlow({ userId, args }) {
+  if (args?.id) {
+    setAgendaStatus(Number(args.id), 'done');
+    return reply(userId, 'מסומן כ-Done. 👍');
+  }
+  if (args?.title) {
+    const items = listAgenda(userId, 'pending', 50);
+    const match = items.find(a => a.title.includes(args.title));
+    if (match) {
+      setAgendaStatus(match.id, 'done');
+      return reply(userId, 'מסומן כ-Done. 👍');
+    }
+  }
+  return reply(userId, 'לא מצאתי פריט כזה. נסה "done <מספר>".');
+}
+
+function pinFactFlow({ userId, args }) {
+  const key   = String(args?.key || '').trim();
+  const value = String(args?.value || '').trim();
+  if (!key || !value) return reply(userId, 'לא הבנתי מה לשמור. נסח כ: "שמור ש<מפתח> הוא <ערך>".');
+  const existing = getMemory(userId, '_pinned_facts');
+  const pins = existing ? JSON.parse(existing) : {};
+  pins[key] = value;
+  setMemory(userId, '_pinned_facts', JSON.stringify(pins));
+  return reply(userId, `שמרתי: ${key} = ${value}.`);
 }
