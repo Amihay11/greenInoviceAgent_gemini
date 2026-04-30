@@ -279,6 +279,15 @@ function initSchema(db) {
   if (!agendaCols.includes('topic')) {
     db.exec(`ALTER TABLE agenda_items ADD COLUMN topic TEXT`);
   }
+
+  // Phase 6: analytics feedback columns on posts (idempotent migration).
+  const postCols = db.prepare("PRAGMA table_info(posts)").all().map(c => c.name);
+  if (!postCols.includes('format_tags')) {
+    db.exec(`ALTER TABLE posts ADD COLUMN format_tags TEXT`);
+  }
+  if (!postCols.includes('performance_score')) {
+    db.exec(`ALTER TABLE posts ADD COLUMN performance_score REAL`);
+  }
 }
 
 // ── business_profile ──────────────────────────────────────────────────────────
@@ -460,6 +469,66 @@ export function markPostFailed(id, error_message) {
 
 export function setPostStatus(id, status) {
   getDb().prepare('UPDATE posts SET status = ? WHERE id = ?').run(status, id);
+}
+
+export function tagPostFormat(id, tags) {
+  getDb().prepare('UPDATE posts SET format_tags = ? WHERE id = ?')
+    .run(JSON.stringify(tags), id);
+}
+
+export function scorePost(id, score) {
+  getDb().prepare('UPDATE posts SET performance_score = ? WHERE id = ?')
+    .run(score, id);
+}
+
+// Returns winning format patterns ordered by avg performance_score.
+// Only considers posts with a score AND format_tags set.
+export function getTopFormats(userId, platform = null, limit = 5) {
+  const rows = getDb().prepare(`
+    SELECT format_tags, performance_score FROM posts
+    WHERE user_id = ? AND format_tags IS NOT NULL AND performance_score IS NOT NULL
+      ${platform ? 'AND platform = ?' : ''}
+    ORDER BY performance_score DESC LIMIT 50
+  `).all(...[userId, ...(platform ? [platform] : [])]);
+
+  const agg = {};
+  for (const r of rows) {
+    let tags;
+    try { tags = JSON.parse(r.format_tags); } catch (_) { continue; }
+    const key = [tags.tone, tags.hook_type, tags.length_bucket].filter(Boolean).join('|');
+    if (!agg[key]) agg[key] = { tags, scores: [] };
+    agg[key].scores.push(r.performance_score);
+  }
+  return Object.values(agg)
+    .map(({ tags, scores }) => ({
+      tags,
+      avg_score: scores.reduce((a, b) => a + b, 0) / scores.length,
+      sample_count: scores.length,
+    }))
+    .sort((a, b) => b.avg_score - a.avg_score)
+    .slice(0, limit);
+}
+
+// Score recent posts by matching them to insights_daily CTR/engagement data.
+// Called after pulling Meta insights. Scores = engagement_rate = engagements/reach.
+export function autoScorePostsFromInsights(userId) {
+  const db = getDb();
+  const posts = db.prepare(`
+    SELECT id, platform, published_at FROM posts
+    WHERE user_id = ? AND status = 'published' AND performance_score IS NULL AND published_at IS NOT NULL
+  `).all(userId);
+
+  for (const post of posts) {
+    const day = post.published_at.slice(0, 10);
+    const insight = db.prepare(`
+      SELECT reach, engagements FROM insights_daily
+      WHERE user_id = ? AND platform = ? AND day = ?
+    `).get(userId, post.platform, day);
+    if (insight?.reach > 0) {
+      const score = (insight.engagements || 0) / insight.reach;
+      db.prepare('UPDATE posts SET performance_score = ? WHERE id = ?').run(score, post.id);
+    }
+  }
 }
 
 // ── insights_daily ────────────────────────────────────────────────────────────
@@ -723,6 +792,29 @@ export function setMemory(userId, key, value) {
     VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
   `).run(userId, key, v);
+}
+
+// ── model control ─────────────────────────────────────────────────────────────
+
+const ALLOWED_MODELS = [
+  { id: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro',        note: 'חזק ביותר, איטי יותר' },
+  { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash',      note: 'מהיר + חכם — מומלץ' },
+  { id: 'gemini-2.0-flash',      label: 'Gemini 2.0 Flash',      note: 'מהיר, חסכוני' },
+  { id: 'gemini-1.5-pro',        label: 'Gemini 1.5 Pro',        note: 'מודל ישן, stable' },
+  { id: 'gemini-1.5-flash',      label: 'Gemini 1.5 Flash',      note: 'מודל ישן, זול' },
+];
+
+export function getAllowedModels() { return ALLOWED_MODELS; }
+
+export function getActiveModel(userId) {
+  return getMemory(userId, '_active_model') || null;
+}
+
+export function setActiveModel(userId, modelId) {
+  if (!ALLOWED_MODELS.find(m => m.id === modelId)) {
+    throw new Error(`Model "${modelId}" is not in the allowed list.`);
+  }
+  setMemory(userId, '_active_model', modelId);
 }
 
 // ── dashboard helpers ─────────────────────────────────────────────────────────

@@ -15,12 +15,14 @@ import {
   createCampaign, listCampaigns, setCampaignStatus,
   createCreative, getCreative, listCreatives, setCreativeStatus,
   createPost, getPost, listPosts, setPostStatus, dueScheduledPosts,
+  tagPostFormat, autoScorePostsFromInsights, getTopFormats,
   recentInsights, listGoals, addGoal,
   addInsight, upsertEntity, logAttendance, recentAttendance,
   listAgenda, addAgendaItem, setAgendaStatus,
   bumpAgendaNudge, setAgendaMute, setAgendaMuteByTopic,
   buildContextBundle, formatContextForPrompt,
   logOutboundMessage, recentCalendarEvents, getMemory, setMemory,
+  getAllowedModels, getActiveModel, setActiveModel,
 } from './memory.js';
 import * as strategist from './subagents/strategist.js';
 import * as creative from './subagents/creative.js';
@@ -78,8 +80,10 @@ export function hasPendingSendWhatsapp(chatId) {
 
 const GO_RE = /^(יאללה|קדימה|תעבוד|תתחיל|go|do it|let's go|ok do)$/i;
 
-export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '', sessionHistory = [] }) {
+export async function handleMarketingMessage({ chatId, text, ai, modelName: globalModelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '', sessionHistory = [] }) {
   const userId = chatId;
+  // Per-user model override (set via mk model / dashboard)
+  const modelName = getActiveModel(userId) || globalModelName;
   ensureProfile(userId);
   logInteraction({ userId, role: 'user', channel: 'whatsapp', content: text });
 
@@ -189,6 +193,8 @@ VOCABULARY (use exactly these "action" values):
 - mute_topic              : user wants to stop hearing about a whole topic for a while → args.topic (string), args.days (number, default 7)
 - done_agenda             : user marks an agenda item as done manually → args.id (number or null), args.title (string or null)
 - pin_fact                : user wants to pin a key fact for Shaul to always remember → args.key (string), args.value (string)
+- change_model            : user wants to switch the AI model Shaul uses → args.model_id (string, e.g. "gemini-2.5-flash")
+- show_models             : user asks which AI models are available or which model Shaul is using
 
 EXAMPLES:
 - "מה אתה זוכר עליי" → {"action":"show_memory"}
@@ -211,6 +217,8 @@ EXAMPLES:
 - "תפסיק להזכיר לי על תקציב" → {"action":"mute_topic","args":{"topic":"budget","days":7}}
 - "סיימתי עם פוסט 5" → {"action":"done_agenda","args":{"id":5}}
 - "שמור שהלקוח המועדף הוא ב2ב" → {"action":"pin_fact","args":{"key":"לקוח מועדף","value":"ב2ב"}}
+- "עבור ל-gemini-2.5-flash" → {"action":"change_model","args":{"model_id":"gemini-2.5-flash"}}
+- "איזה מודל אתה משתמש?" → {"action":"show_models"}
 
 Schema: {"action": "<one of the above>", "args": { ... }}
 
@@ -270,6 +278,8 @@ async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGr
     case 'mute_topic':          return muteTopicFlow({ userId, args });
     case 'done_agenda':         return doneAgendaFlow({ userId, args });
     case 'pin_fact':            return pinFactFlow({ userId, args });
+    case 'change_model':        return changeModelFlow({ userId, args });
+    case 'show_models':         return showModelsFlow({ userId });
     default:                    return undefined; // unknown — caller falls back to mentor
   }
 }
@@ -372,6 +382,8 @@ async function handleMkCommand({ chatId, sub, arg, ai, modelName, runGeminiWithT
     case 'publish':    return publishCommand({ userId, arg });
     case 'cleanup':    return cleanupCommand({ userId, ai, modelName });
     case 'dm':         return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args: { client_name: arg } });
+    case 'model':      return changeModelFlow({ userId, args: { model_id: arg.trim() } });
+    case 'models':     return showModelsFlow({ userId });
     case 'help':       return reply(userId, MK_HELP);
     default:           return reply(userId, `לא מכיר את ${sub}. נסה: ${MK_HELP}`);
   }
@@ -644,7 +656,10 @@ async function postFlow({ chatId, brief, platform, ai, modelName }) {
     return reply(userId, 'תכתוב על מה הפוסט. לדוגמה: "mk post מבצע 30% על קורס SEO"');
   }
   await reply(userId, `✍️ הקריאייטיב כותב פוסט ל-${platform === 'facebook' ? 'פייסבוק' : 'אינסטגרם'}...`);
-  const draft = await creative.draftPost({ userId, brief, platform, ai, modelName });
+
+  // Inject winning format hint from analytics feedback loop
+  const formatHint = buildFormatHint(userId, platform);
+  const draft = await creative.draftPost({ userId, brief, platform, ai, modelName, formatHint });
   if (!draft) return reply(userId, 'לא הצלחתי לכתוב טיוטה. נסה לנסח אחרת.');
 
   const summary = formatDraftSummary(draft);
@@ -1059,6 +1074,9 @@ async function metaInsightsFlow({ chatId, ai, modelName, args }) {
   } catch (e) {
     console.error('[meta_insights]', e.message);
   }
+  // Auto-score published posts from today's insights (analytics feedback loop)
+  try { autoScorePostsFromInsights(userId); } catch (_) {}
+
   const refined = await analyst.refineCampaign({ userId, ai, modelName, metricsBundle, hint: args || {} });
   if (!refined) return reply(userId, 'אין מספיק נתונים לחידוד.');
   setPending(chatId, 'apply_refined_plan', { refined });
@@ -1217,6 +1235,8 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
       userId, creativeId, platform, caption, image_url: draft.image_url || null,
       status: 'approved',
     });
+    // Persist format tags for analytics feedback loop
+    if (draft.format_tags) tagPostFormat(postId, draft.format_tags);
 
     if (!meta.isConfigured()) {
       setPostStatus(postId, 'pending_approval');
@@ -1432,6 +1452,17 @@ function doneAgendaFlow({ userId, args }) {
   return reply(userId, 'לא מצאתי פריט כזה. נסה "done <מספר>".');
 }
 
+// Build a human-readable hint from top-performing format patterns.
+function buildFormatHint(userId, platform) {
+  try {
+    const top = getTopFormats(userId, platform, 3);
+    if (!top.length) return null;
+    return top.map((f, i) =>
+      `${i + 1}. tone=${f.tags.tone}, hook=${f.tags.hook_type}, length=${f.tags.length_bucket} (avg score ${f.avg_score.toFixed(3)}, n=${f.sample_count})`
+    ).join('\n');
+  } catch (_) { return null; }
+}
+
 function pinFactFlow({ userId, args }) {
   const key   = String(args?.key || '').trim();
   const value = String(args?.value || '').trim();
@@ -1441,4 +1472,32 @@ function pinFactFlow({ userId, args }) {
   pins[key] = value;
   setMemory(userId, '_pinned_facts', JSON.stringify(pins));
   return reply(userId, `שמרתי: ${key} = ${value}.`);
+}
+
+function changeModelFlow({ userId, args }) {
+  const modelId = String(args?.model_id || '').trim();
+  if (!modelId) {
+    return showModelsFlow({ userId });
+  }
+  try {
+    setActiveModel(userId, modelId);
+    const model = getAllowedModels().find(m => m.id === modelId);
+    return reply(userId, `✅ עברתי ל-*${model?.label || modelId}*${model?.note ? ` — ${model.note}` : ''}. השינוי בתוקף מיד.`);
+  } catch (e) {
+    const list = getAllowedModels().map(m => `• \`${m.id}\` — ${m.label} (${m.note})`).join('\n');
+    return reply(userId, `המודל "${modelId}" לא ברשימה. מודלים זמינים:\n${list}`);
+  }
+}
+
+function showModelsFlow({ userId }) {
+  const current = getActiveModel(userId);
+  const models = getAllowedModels();
+  const lines = models.map(m => {
+    const active = m.id === current ? ' ← *פעיל*' : '';
+    return `• \`${m.id}\` — ${m.label} (${m.note})${active}`;
+  });
+  const currentLabel = current
+    ? (models.find(m => m.id === current)?.label || current)
+    : `ברירת מחדל (${process.env.GEMINI_MODEL || 'gemini-2.5-pro'})`;
+  return reply(userId, `🤖 *מודל נוכחי:* ${currentLabel}\n\n*מודלים זמינים:*\n${lines.join('\n')}\n\nלהחלפה: \`mk model <id>\` או "עבור ל-<id>"`);
 }
