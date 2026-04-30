@@ -1,5 +1,6 @@
 #!/bin/bash
 # Oracle Cloud Always-Free Ubuntu 22.04 — one-time setup script
+# Supports both ARM (VM.Standard.A1.Flex) and AMD (VM.Standard.E2.1.Micro)
 # Run as a non-root user with sudo rights (default oracle-cloud user: ubuntu)
 #
 # Usage:
@@ -21,6 +22,26 @@ NC='\033[0m'
 info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 section() { echo -e "\n${GREEN}══════════════════════════════════════${NC}"; echo -e "${GREEN} $*${NC}"; echo -e "${GREEN}══════════════════════════════════════${NC}"; }
+
+# ── 0. Swap file (critical for 1 GB RAM machines like E2.1.Micro) ─────────────
+section "0. Setting up 2 GB swap file"
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+if [ "$TOTAL_RAM_MB" -lt 2048 ] && ! swapon --show | grep -q '/swapfile'; then
+  info "RAM is ${TOTAL_RAM_MB} MB — adding 2 GB swap to prevent Chrome OOM crashes"
+  sudo fallocate -l 2G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  # Reduce swap aggressiveness — only use swap when RAM is nearly full
+  echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+  sudo sysctl -p
+  info "Swap active: $(free -h | awk '/^Swap:/{print $2}')"
+elif swapon --show | grep -q '/swapfile'; then
+  info "Swap already configured — skipping."
+else
+  info "RAM is ${TOTAL_RAM_MB} MB — swap not needed."
+fi
 
 # ── 1. System packages ────────────────────────────────────────────────────────
 section "1. Updating system packages"

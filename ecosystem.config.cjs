@@ -25,6 +25,9 @@ module.exports = {
       // Pass through all env from the shell; .env is loaded by the agent itself
       env: {
         NODE_ENV: 'production',
+        // Cap Node.js heap at 512 MB — important on 1 GB RAM machines (E2.1.Micro).
+        // Chrome runs as a separate process and is not affected by this limit.
+        NODE_OPTIONS: '--max-old-space-size=512',
       },
     },
   ],
