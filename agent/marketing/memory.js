@@ -263,7 +263,82 @@ function initSchema(db) {
       updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (user_id, key)
     );
+
+    -- Phase 7: knowledge graph edges between content items.
+    CREATE TABLE IF NOT EXISTS content_edges (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id          TEXT NOT NULL,
+      from_type        TEXT NOT NULL,
+      from_id          INTEGER NOT NULL,
+      to_type          TEXT NOT NULL,
+      to_id            INTEGER NOT NULL,
+      relation         TEXT NOT NULL,
+      weight           REAL NOT NULL DEFAULT 1.0,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      access_count     INTEGER NOT NULL DEFAULT 0,
+      last_accessed_at TEXT,
+      UNIQUE(user_id, from_type, from_id, to_type, to_id, relation)
+    );
+    CREATE INDEX IF NOT EXISTS idx_edges_from ON content_edges(user_id, from_type, from_id);
+    CREATE INDEX IF NOT EXISTS idx_edges_to   ON content_edges(user_id, to_type, to_id);
   `);
+
+  // Phase 5: anti-nag columns on agenda_items (idempotent migration).
+  const agendaCols = db.prepare("PRAGMA table_info(agenda_items)").all().map(c => c.name);
+  if (!agendaCols.includes('last_mentioned_at')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN last_mentioned_at TEXT`);
+  }
+  if (!agendaCols.includes('mute_until')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN mute_until TEXT`);
+  }
+  if (!agendaCols.includes('nudge_count')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN nudge_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!agendaCols.includes('topic')) {
+    db.exec(`ALTER TABLE agenda_items ADD COLUMN topic TEXT`);
+  }
+
+  // Phase 6: analytics feedback columns on posts (idempotent migration).
+  const postCols = db.prepare("PRAGMA table_info(posts)").all().map(c => c.name);
+  if (!postCols.includes('format_tags')) {
+    db.exec(`ALTER TABLE posts ADD COLUMN format_tags TEXT`);
+  }
+  if (!postCols.includes('performance_score')) {
+    db.exec(`ALTER TABLE posts ADD COLUMN performance_score REAL`);
+  }
+
+  // Phase 7: forgetting algorithm — access tracking on all memory tables.
+  // learned_insights + status for archiving
+  const insightCols = db.prepare("PRAGMA table_info(learned_insights)").all().map(c => c.name);
+  if (!insightCols.includes('access_count'))     db.exec(`ALTER TABLE learned_insights ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!insightCols.includes('last_accessed_at')) db.exec(`ALTER TABLE learned_insights ADD COLUMN last_accessed_at TEXT`);
+  if (!insightCols.includes('status'))           db.exec(`ALTER TABLE learned_insights ADD COLUMN status TEXT`);
+
+  // entities + status for archiving
+  const entityCols = db.prepare("PRAGMA table_info(entities)").all().map(c => c.name);
+  if (!entityCols.includes('access_count'))     db.exec(`ALTER TABLE entities ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!entityCols.includes('last_accessed_at')) db.exec(`ALTER TABLE entities ADD COLUMN last_accessed_at TEXT`);
+  if (!entityCols.includes('status'))           db.exec(`ALTER TABLE entities ADD COLUMN status TEXT`);
+
+  // goals + pinned flag (pinned goals never archived)
+  const goalCols = db.prepare("PRAGMA table_info(goals)").all().map(c => c.name);
+  if (!goalCols.includes('access_count'))     db.exec(`ALTER TABLE goals ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!goalCols.includes('last_accessed_at')) db.exec(`ALTER TABLE goals ADD COLUMN last_accessed_at TEXT`);
+  if (!goalCols.includes('pinned'))           db.exec(`ALTER TABLE goals ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+
+  // campaigns
+  const campCols = db.prepare("PRAGMA table_info(campaigns)").all().map(c => c.name);
+  if (!campCols.includes('access_count'))     db.exec(`ALTER TABLE campaigns ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!campCols.includes('last_accessed_at')) db.exec(`ALTER TABLE campaigns ADD COLUMN last_accessed_at TEXT`);
+
+  // posts
+  if (!postCols.includes('access_count'))     db.exec(`ALTER TABLE posts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!postCols.includes('last_accessed_at')) db.exec(`ALTER TABLE posts ADD COLUMN last_accessed_at TEXT`);
+
+  // reflections
+  const reflCols = db.prepare("PRAGMA table_info(reflections)").all().map(c => c.name);
+  if (!reflCols.includes('access_count'))     db.exec(`ALTER TABLE reflections ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!reflCols.includes('last_accessed_at')) db.exec(`ALTER TABLE reflections ADD COLUMN last_accessed_at TEXT`);
 }
 
 // ── business_profile ──────────────────────────────────────────────────────────
@@ -333,7 +408,8 @@ export function addInsight({ userId, topic, insight, confidence = 0.6, source = 
 
 export function listInsights(userId, limit = 50) {
   return getDb().prepare(`
-    SELECT * FROM learned_insights WHERE user_id = ?
+    SELECT * FROM learned_insights
+    WHERE user_id = ? AND (status IS NULL OR status != 'archived')
     ORDER BY confidence DESC, updated_at DESC LIMIT ?
   `).all(userId, limit);
 }
@@ -349,9 +425,15 @@ export function upsertEntity({ userId, kind, name, details = null }) {
 
 export function listEntities(userId, kind = null) {
   if (kind) {
-    return getDb().prepare('SELECT * FROM entities WHERE user_id = ? AND kind = ?').all(userId, kind);
+    return getDb().prepare(
+      `SELECT * FROM entities WHERE user_id = ? AND kind = ?
+       AND (status IS NULL OR status != 'archived')`
+    ).all(userId, kind);
   }
-  return getDb().prepare('SELECT * FROM entities WHERE user_id = ?').all(userId);
+  return getDb().prepare(
+    `SELECT * FROM entities WHERE user_id = ?
+     AND (status IS NULL OR status != 'archived')`
+  ).all(userId);
 }
 
 // ── campaigns ─────────────────────────────────────────────────────────────────
@@ -447,6 +529,66 @@ export function setPostStatus(id, status) {
   getDb().prepare('UPDATE posts SET status = ? WHERE id = ?').run(status, id);
 }
 
+export function tagPostFormat(id, tags) {
+  getDb().prepare('UPDATE posts SET format_tags = ? WHERE id = ?')
+    .run(JSON.stringify(tags), id);
+}
+
+export function scorePost(id, score) {
+  getDb().prepare('UPDATE posts SET performance_score = ? WHERE id = ?')
+    .run(score, id);
+}
+
+// Returns winning format patterns ordered by avg performance_score.
+// Only considers posts with a score AND format_tags set.
+export function getTopFormats(userId, platform = null, limit = 5) {
+  const rows = getDb().prepare(`
+    SELECT format_tags, performance_score FROM posts
+    WHERE user_id = ? AND format_tags IS NOT NULL AND performance_score IS NOT NULL
+      ${platform ? 'AND platform = ?' : ''}
+    ORDER BY performance_score DESC LIMIT 50
+  `).all(...[userId, ...(platform ? [platform] : [])]);
+
+  const agg = {};
+  for (const r of rows) {
+    let tags;
+    try { tags = JSON.parse(r.format_tags); } catch (_) { continue; }
+    const key = [tags.tone, tags.hook_type, tags.length_bucket].filter(Boolean).join('|');
+    if (!agg[key]) agg[key] = { tags, scores: [] };
+    agg[key].scores.push(r.performance_score);
+  }
+  return Object.values(agg)
+    .map(({ tags, scores }) => ({
+      tags,
+      avg_score: scores.reduce((a, b) => a + b, 0) / scores.length,
+      sample_count: scores.length,
+    }))
+    .sort((a, b) => b.avg_score - a.avg_score)
+    .slice(0, limit);
+}
+
+// Score recent posts by matching them to insights_daily CTR/engagement data.
+// Called after pulling Meta insights. Scores = engagement_rate = engagements/reach.
+export function autoScorePostsFromInsights(userId) {
+  const db = getDb();
+  const posts = db.prepare(`
+    SELECT id, platform, published_at FROM posts
+    WHERE user_id = ? AND status = 'published' AND performance_score IS NULL AND published_at IS NOT NULL
+  `).all(userId);
+
+  for (const post of posts) {
+    const day = post.published_at.slice(0, 10);
+    const insight = db.prepare(`
+      SELECT reach, engagements FROM insights_daily
+      WHERE user_id = ? AND platform = ? AND day = ?
+    `).get(userId, post.platform, day);
+    if (insight?.reach > 0) {
+      const score = (insight.engagements || 0) / insight.reach;
+      db.prepare('UPDATE posts SET performance_score = ? WHERE id = ?').run(score, post.id);
+    }
+  }
+}
+
 // ── insights_daily ────────────────────────────────────────────────────────────
 
 export function upsertDailyInsight({ userId, day, platform, reach, impressions, engagements, clicks, spend, revenue, raw_json = null }) {
@@ -528,11 +670,72 @@ export function setAgendaStatus(id, status) {
   if (row?.user_id) notionMem.syncAgendaStatusToNotion(row.user_id, id, status).catch(() => {});
 }
 
-export function clearStaleAgenda(userId, olderThanDays = 14) {
+export function clearStaleAgenda(userId, olderThanDays = 7) {
   getDb().prepare(`
     DELETE FROM agenda_items WHERE user_id = ? AND status = 'pending'
     AND created_at < datetime('now', ?)
   `).run(userId, `-${olderThanDays} days`);
+}
+
+export function bumpAgendaNudge(id) {
+  getDb().prepare(`
+    UPDATE agenda_items
+    SET nudge_count = nudge_count + 1, last_mentioned_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ?
+  `).run(id);
+}
+
+export function setAgendaMute(id, untilIso) {
+  getDb().prepare(`
+    UPDATE agenda_items SET mute_until = ?, updated_at = datetime('now') WHERE id = ?
+  `).run(untilIso, id);
+}
+
+export function setAgendaMuteByTopic(userId, topic, days) {
+  const until = new Date(Date.now() + days * 86400_000).toISOString();
+  getDb().prepare(`
+    UPDATE agenda_items SET mute_until = ?, updated_at = datetime('now')
+    WHERE user_id = ? AND topic = ? AND status = 'pending'
+  `).run(until, userId, topic);
+}
+
+export function setAgendaTopic(id, topic) {
+  getDb().prepare(`UPDATE agenda_items SET topic = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(topic, id);
+}
+
+// Returns eligible agenda items after applying cooldown + staleness + topic filter.
+// cooldownHours = 24 * 2^min(nudge_count, 4)  (24h → 48h → 96h → 192h → 384h)
+export function listEligibleAgenda(userId, currentTopic = null, limit = 3) {
+  const now = new Date().toISOString();
+  const items = getDb().prepare(`
+    SELECT * FROM agenda_items
+    WHERE user_id = ? AND status = 'pending'
+      AND (mute_until IS NULL OR mute_until < ?)
+    ORDER BY priority ASC, COALESCE(due_at, '9999-12-31'), created_at
+    LIMIT 20
+  `).all(userId, now);
+
+  const eligible = [];
+  for (const item of items) {
+    const nudges = item.nudge_count || 0;
+    const cooldownHours = 24 * Math.pow(2, Math.min(nudges, 4));
+    const cooldownMs = cooldownHours * 3600_000;
+    const lastMentioned = item.last_mentioned_at ? new Date(item.last_mentioned_at).getTime() : 0;
+    if (Date.now() - lastMentioned < cooldownMs) continue;
+
+    // Staleness decay: 0.5^(age_days/7) * priority/10 — drop below 0.1
+    const ageDays = (Date.now() - new Date(item.created_at).getTime()) / 86400_000;
+    const salience = Math.pow(0.5, ageDays / 7) * ((item.priority || 5) / 10);
+    if (salience < 0.1) continue;
+
+    // Topic filter: suppress if current topic is known and doesn't match item topic
+    if (currentTopic && item.topic && item.topic !== currentTopic) continue;
+
+    eligible.push(item);
+    if (eligible.length >= limit) break;
+  }
+  return eligible;
 }
 
 // ── attendance ───────────────────────────────────────────────────────────────
@@ -647,6 +850,29 @@ export function setMemory(userId, key, value) {
     VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
   `).run(userId, key, v);
+}
+
+// ── model control ─────────────────────────────────────────────────────────────
+
+const ALLOWED_MODELS = [
+  { id: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro',        note: 'חזק ביותר, איטי יותר' },
+  { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash',      note: 'מהיר + חכם — מומלץ' },
+  { id: 'gemini-2.0-flash',      label: 'Gemini 2.0 Flash',      note: 'מהיר, חסכוני' },
+  { id: 'gemini-1.5-pro',        label: 'Gemini 1.5 Pro',        note: 'מודל ישן, stable' },
+  { id: 'gemini-1.5-flash',      label: 'Gemini 1.5 Flash',      note: 'מודל ישן, זול' },
+];
+
+export function getAllowedModels() { return ALLOWED_MODELS; }
+
+export function getActiveModel(userId) {
+  return getMemory(userId, '_active_model') || null;
+}
+
+export function setActiveModel(userId, modelId) {
+  if (!ALLOWED_MODELS.find(m => m.id === modelId)) {
+    throw new Error(`Model "${modelId}" is not in the allowed list.`);
+  }
+  setMemory(userId, '_active_model', modelId);
 }
 
 // ── dashboard helpers ─────────────────────────────────────────────────────────

@@ -15,12 +15,16 @@ import {
   createCampaign, listCampaigns, setCampaignStatus,
   createCreative, getCreative, listCreatives, setCreativeStatus,
   createPost, getPost, listPosts, setPostStatus, dueScheduledPosts,
+  tagPostFormat, autoScorePostsFromInsights, getTopFormats,
   recentInsights, listGoals, addGoal,
-  addInsight, upsertEntity, logAttendance, recentAttendance,
+  addInsight, upsertEntity, listEntities, logAttendance, recentAttendance,
   listAgenda, addAgendaItem, setAgendaStatus,
+  bumpAgendaNudge, setAgendaMute, setAgendaMuteByTopic,
   buildContextBundle, formatContextForPrompt,
   logOutboundMessage, recentCalendarEvents, getMemory, setMemory,
+  getAllowedModels, getActiveModel, setActiveModel,
 } from './memory.js';
+import { addEdge } from './knowledgeGraph.js';
 import * as strategist from './subagents/strategist.js';
 import * as creative from './subagents/creative.js';
 import * as campaignMgr from './subagents/campaignManager.js';
@@ -37,6 +41,10 @@ import { buildSystemPrompt, buildToolsBlock } from '../personality/shaul.js';
 const pendingApprovals = new Map();
 // Active onboarding sessions: chatId → true
 const onboardingActive = new Set();
+// Proactivity budget: chatId → count of proactive nudges sent today (resets at midnight)
+const proactivityBudget = new Map();
+let proactivityBudgetDay = new Date().toISOString().slice(0, 10);
+const MAX_PROACTIVE_PER_DAY = 3;
 
 const APPROVAL_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -73,8 +81,10 @@ export function hasPendingSendWhatsapp(chatId) {
 
 const GO_RE = /^(יאללה|קדימה|תעבוד|תתחיל|go|do it|let's go|ok do)$/i;
 
-export async function handleMarketingMessage({ chatId, text, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '', sessionHistory = [] }) {
+export async function handleMarketingMessage({ chatId, text, ai, modelName: globalModelName, runGeminiWithTools, getGreenInvoiceClient, waClient, toolsBlock = '', sessionHistory = [] }) {
   const userId = chatId;
+  // Per-user model override (set via mk model / dashboard)
+  const modelName = getActiveModel(userId) || globalModelName;
   ensureProfile(userId);
   logInteraction({ userId, role: 'user', channel: 'whatsapp', content: text });
 
@@ -139,6 +149,9 @@ export async function handleMarketingMessage({ chatId, text, ai, modelName, runG
   });
   const finalReply = reply(userId, replyText);
 
+  // Post-processor: bump nudge counts for agenda items referenced in this reply.
+  bumpMentionedAgendaItems(userId, replyText);
+
   // Fire-and-forget background work: extract structured data + refresh agenda.
   silentExtraction({ userId, userMessage: text, ai, modelName })
     .catch(err => console.error('[CMO] silent extraction failed:', err.message));
@@ -177,6 +190,12 @@ VOCABULARY (use exactly these "action" values):
 - meta_insights           : "תראה לי איך הקמפיין רץ", "how is the campaign performing"
 - dm_client               : user asks Shaul to message a CLIENT (not the user) → args.client_name, args.intent
 - share_canva_design      : user asks for the Canva design link, or asks to send/share the design (by email, link, etc.) → args.email (optional)
+- snooze_agenda           : user wants to snooze/defer a specific agenda item by id or title → args.id (number or null), args.title (string or null), args.days (number, default 3)
+- mute_topic              : user wants to stop hearing about a whole topic for a while → args.topic (string), args.days (number, default 7)
+- done_agenda             : user marks an agenda item as done manually → args.id (number or null), args.title (string or null)
+- pin_fact                : user wants to pin a key fact for Shaul to always remember → args.key (string), args.value (string)
+- change_model            : user wants to switch the AI model Shaul uses → args.model_id (string, e.g. "gemini-2.5-flash")
+- show_models             : user asks which AI models are available or which model Shaul is using
 
 EXAMPLES:
 - "מה אתה זוכר עליי" → {"action":"show_memory"}
@@ -194,6 +213,13 @@ EXAMPLES:
 - "מה דעתך על הקמפיין שלי" → {"action":"none"}
 - "תכתוב לדנה כהן הודעה שתאשר" → {"action":"dm_client","args":{"client_name":"דנה כהן","intent":"שתאשר"}}
 - "what about scheduling a follow-up with David tuesday" → {"action":"schedule_followup","args":{"who":"David","when":"tuesday"}}
+- "תעזוב את הפוסט לפייסבוק" → {"action":"snooze_agenda","args":{"title":"הפוסט לפייסבוק","days":3}}
+- "snooze 7" → {"action":"snooze_agenda","args":{"id":7,"days":3}}
+- "תפסיק להזכיר לי על תקציב" → {"action":"mute_topic","args":{"topic":"budget","days":7}}
+- "סיימתי עם פוסט 5" → {"action":"done_agenda","args":{"id":5}}
+- "שמור שהלקוח המועדף הוא ב2ב" → {"action":"pin_fact","args":{"key":"לקוח מועדף","value":"ב2ב"}}
+- "עבור ל-gemini-2.5-flash" → {"action":"change_model","args":{"model_id":"gemini-2.5-flash"}}
+- "איזה מודל אתה משתמש?" → {"action":"show_models"}
 
 Schema: {"action": "<one of the above>", "args": { ... }}
 
@@ -249,6 +275,12 @@ async function dispatchAction({ chatId, ai, modelName, runGeminiWithTools, getGr
     case 'meta_insights':       return metaInsightsFlow({ chatId, ai, modelName, args });
     case 'dm_client':           return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, toolsBlock, args });
     case 'share_canva_design':  return shareCanvaDesignFlow({ chatId, args });
+    case 'snooze_agenda':       return snoozeAgendaFlow({ userId, args });
+    case 'mute_topic':          return muteTopicFlow({ userId, args });
+    case 'done_agenda':         return doneAgendaFlow({ userId, args });
+    case 'pin_fact':            return pinFactFlow({ userId, args });
+    case 'change_model':        return changeModelFlow({ userId, args });
+    case 'show_models':         return showModelsFlow({ userId });
     default:                    return undefined; // unknown — caller falls back to mentor
   }
 }
@@ -303,6 +335,32 @@ async function silentExtraction({ userId, userMessage, ai, modelName }) {
   try { await director.refreshAgenda({ userId, ai, modelName }); } catch (_) {}
 }
 
+// Wire knowledge-graph mentions edges: check entity names against post caption.
+function _wireEntityMentions(userId, postId, captionText) {
+  if (!captionText) return;
+  const lower = captionText.toLowerCase();
+  try {
+    const entities = listEntities(userId);
+    for (const e of entities) {
+      if (e.name && lower.includes(e.name.toLowerCase())) {
+        addEdge({ userId, fromType: 'post', fromId: postId, toType: 'entity', toId: e.id, relation: 'mentions', weight: 0.8 });
+      }
+    }
+  } catch (_) {}
+}
+
+// Bump nudge count on any pending agenda item whose title appears in the reply.
+function bumpMentionedAgendaItems(userId, replyText) {
+  if (!replyText) return;
+  const items = listAgenda(userId, 'pending', 20);
+  const lower = replyText.toLowerCase();
+  for (const item of items) {
+    const words = item.title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const matched = words.length > 0 && words.some(w => lower.includes(w));
+    if (matched) bumpAgendaNudge(item.id);
+  }
+}
+
 function maybeMarkOnboardingDone(userId) {
   const p = getProfile(userId);
   if (!p || p.onboarding_done) return;
@@ -339,6 +397,8 @@ async function handleMkCommand({ chatId, sub, arg, ai, modelName, runGeminiWithT
     case 'publish':    return publishCommand({ userId, arg });
     case 'cleanup':    return cleanupCommand({ userId, ai, modelName });
     case 'dm':         return dmClientFlow({ chatId, ai, modelName, runGeminiWithTools, getGreenInvoiceClient, args: { client_name: arg } });
+    case 'model':      return changeModelFlow({ userId, args: { model_id: arg.trim() } });
+    case 'models':     return showModelsFlow({ userId });
     case 'help':       return reply(userId, MK_HELP);
     default:           return reply(userId, `לא מכיר את ${sub}. נסה: ${MK_HELP}`);
   }
@@ -611,7 +671,10 @@ async function postFlow({ chatId, brief, platform, ai, modelName }) {
     return reply(userId, 'תכתוב על מה הפוסט. לדוגמה: "mk post מבצע 30% על קורס SEO"');
   }
   await reply(userId, `✍️ הקריאייטיב כותב פוסט ל-${platform === 'facebook' ? 'פייסבוק' : 'אינסטגרם'}...`);
-  const draft = await creative.draftPost({ userId, brief, platform, ai, modelName });
+
+  // Inject winning format hint from analytics feedback loop
+  const formatHint = buildFormatHint(userId, platform);
+  const draft = await creative.draftPost({ userId, brief, platform, ai, modelName, formatHint });
   if (!draft) return reply(userId, 'לא הצלחתי לכתוב טיוטה. נסה לנסח אחרת.');
 
   const summary = formatDraftSummary(draft);
@@ -1026,6 +1089,9 @@ async function metaInsightsFlow({ chatId, ai, modelName, args }) {
   } catch (e) {
     console.error('[meta_insights]', e.message);
   }
+  // Auto-score published posts from today's insights (analytics feedback loop)
+  try { autoScorePostsFromInsights(userId); } catch (_) {}
+
   const refined = await analyst.refineCampaign({ userId, ai, modelName, metricsBundle, hint: args || {} });
   if (!refined) return reply(userId, 'אין מספיק נתונים לחידוד.');
   setPending(chatId, 'apply_refined_plan', { refined });
@@ -1116,6 +1182,12 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
       status: 'approved',
     });
     const postId = createPost({ userId, creativeId, platform: 'instagram', caption, image_url: imageUrl, status: 'approved' });
+    // Knowledge graph: wire post → campaign (part_of) and post → entities (mentions)
+    const canvaCreative = getCreative(creativeId);
+    if (canvaCreative?.campaign_id) {
+      addEdge({ userId, fromType: 'post', fromId: postId, toType: 'campaign', toId: canvaCreative.campaign_id, relation: 'part_of', weight: 1.0 });
+    }
+    _wireEntityMentions(userId, postId, caption);
     if (!meta.isConfigured()) {
       setPostStatus(postId, 'pending_approval');
       return reply(userId, `💾 הפוסט נשמר (#${postId}) אבל Meta API לא מוגדר.`);
@@ -1184,6 +1256,14 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
       userId, creativeId, platform, caption, image_url: draft.image_url || null,
       status: 'approved',
     });
+    // Persist format tags for analytics feedback loop
+    if (draft.format_tags) tagPostFormat(postId, draft.format_tags);
+    // Knowledge graph: wire post → campaign (part_of) and post → entities (mentions)
+    const savedCreative = getCreative(creativeId);
+    if (savedCreative?.campaign_id) {
+      addEdge({ userId, fromType: 'post', fromId: postId, toType: 'campaign', toId: savedCreative.campaign_id, relation: 'part_of', weight: 1.0 });
+    }
+    _wireEntityMentions(userId, postId, caption);
 
     if (!meta.isConfigured()) {
       setPostStatus(postId, 'pending_approval');
@@ -1332,4 +1412,119 @@ export async function processScheduledPosts() {
     });
   }
   return nudges;
+}
+
+// ── Proactivity budget ────────────────────────────────────────────────────────
+
+export function canSendProactive(chatId) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== proactivityBudgetDay) {
+    proactivityBudget.clear();
+    proactivityBudgetDay = today;
+  }
+  return (proactivityBudget.get(chatId) || 0) < MAX_PROACTIVE_PER_DAY;
+}
+
+export function consumeProactiveBudget(chatId) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== proactivityBudgetDay) {
+    proactivityBudget.clear();
+    proactivityBudgetDay = today;
+  }
+  proactivityBudget.set(chatId, (proactivityBudget.get(chatId) || 0) + 1);
+}
+
+// ── Snooze / mute / done / pin flows ──────────────────────────────────────────
+
+function snoozeAgendaFlow({ userId, args }) {
+  const days = Number(args?.days) || 3;
+  const until = new Date(Date.now() + days * 86400_000).toISOString();
+
+  if (args?.id) {
+    setAgendaMute(Number(args.id), until);
+    return reply(userId, `בסדר, נדחה ל-${days} ימים.`);
+  }
+  if (args?.title) {
+    const items = listAgenda(userId, 'pending', 50);
+    const match = items.find(a => a.title.includes(args.title));
+    if (match) {
+      setAgendaMute(match.id, until);
+      return reply(userId, `בסדר, נדחה ל-${days} ימים.`);
+    }
+  }
+  return reply(userId, 'לא מצאתי פריט כזה באג\'נדה. נסה "snooze <מספר>".');
+}
+
+function muteTopicFlow({ userId, args }) {
+  const days = Number(args?.days) || 7;
+  const topic = String(args?.topic || '');
+  if (!topic) return reply(userId, 'לא ברור איזה נושא לדמם. נסה שוב.');
+  setAgendaMuteByTopic(userId, topic, days);
+  return reply(userId, `לא אזכיר לך על "${topic}" ב-${days} הימים הקרובים.`);
+}
+
+function doneAgendaFlow({ userId, args }) {
+  if (args?.id) {
+    setAgendaStatus(Number(args.id), 'done');
+    return reply(userId, 'מסומן כ-Done. 👍');
+  }
+  if (args?.title) {
+    const items = listAgenda(userId, 'pending', 50);
+    const match = items.find(a => a.title.includes(args.title));
+    if (match) {
+      setAgendaStatus(match.id, 'done');
+      return reply(userId, 'מסומן כ-Done. 👍');
+    }
+  }
+  return reply(userId, 'לא מצאתי פריט כזה. נסה "done <מספר>".');
+}
+
+// Build a human-readable hint from top-performing format patterns.
+function buildFormatHint(userId, platform) {
+  try {
+    const top = getTopFormats(userId, platform, 3);
+    if (!top.length) return null;
+    return top.map((f, i) =>
+      `${i + 1}. tone=${f.tags.tone}, hook=${f.tags.hook_type}, length=${f.tags.length_bucket} (avg score ${f.avg_score.toFixed(3)}, n=${f.sample_count})`
+    ).join('\n');
+  } catch (_) { return null; }
+}
+
+function pinFactFlow({ userId, args }) {
+  const key   = String(args?.key || '').trim();
+  const value = String(args?.value || '').trim();
+  if (!key || !value) return reply(userId, 'לא הבנתי מה לשמור. נסח כ: "שמור ש<מפתח> הוא <ערך>".');
+  const existing = getMemory(userId, '_pinned_facts');
+  const pins = existing ? JSON.parse(existing) : {};
+  pins[key] = value;
+  setMemory(userId, '_pinned_facts', JSON.stringify(pins));
+  return reply(userId, `שמרתי: ${key} = ${value}.`);
+}
+
+function changeModelFlow({ userId, args }) {
+  const modelId = String(args?.model_id || '').trim();
+  if (!modelId) {
+    return showModelsFlow({ userId });
+  }
+  try {
+    setActiveModel(userId, modelId);
+    const model = getAllowedModels().find(m => m.id === modelId);
+    return reply(userId, `✅ עברתי ל-*${model?.label || modelId}*${model?.note ? ` — ${model.note}` : ''}. השינוי בתוקף מיד.`);
+  } catch (e) {
+    const list = getAllowedModels().map(m => `• \`${m.id}\` — ${m.label} (${m.note})`).join('\n');
+    return reply(userId, `המודל "${modelId}" לא ברשימה. מודלים זמינים:\n${list}`);
+  }
+}
+
+function showModelsFlow({ userId }) {
+  const current = getActiveModel(userId);
+  const models = getAllowedModels();
+  const lines = models.map(m => {
+    const active = m.id === current ? ' ← *פעיל*' : '';
+    return `• \`${m.id}\` — ${m.label} (${m.note})${active}`;
+  });
+  const currentLabel = current
+    ? (models.find(m => m.id === current)?.label || current)
+    : `ברירת מחדל (${process.env.GEMINI_MODEL || 'gemini-2.5-pro'})`;
+  return reply(userId, `🤖 *מודל נוכחי:* ${currentLabel}\n\n*מודלים זמינים:*\n${lines.join('\n')}\n\nלהחלפה: \`mk model <id>\` או "עבור ל-<id>"`);
 }

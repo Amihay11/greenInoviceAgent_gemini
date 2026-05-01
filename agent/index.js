@@ -29,9 +29,12 @@ import {
 import {
   handleMarketingMessage, processScheduledPosts, getDailyBriefingsToSend,
   registerSendWhatsappPending, hasPendingSendWhatsapp,
+  canSendProactive, consumeProactiveBudget,
 } from './marketing/cmo.js';
 import { parseAllowList, normalizeJid } from './marketing/jid.js';
-import { logCalendarEvent } from './marketing/memory.js';
+import { logCalendarEvent, bumpAgendaNudge, setAgendaMute, setAgendaMuteByTopic, setAgendaStatus, listAgenda, getMemory, setMemory, listAllUserIds } from './marketing/memory.js';
+import { startNotionPollLoop } from './marketing/notion-memory.js';
+import { runForgettingSweep } from './marketing/forgetting.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -208,6 +211,114 @@ async function handleSendEmailLocal({ args }) {
   }
 }
 
+// --- Local function-tools: agenda control (snooze / mute / done / pin) ---
+const SNOOZE_AGENDA_DECL = {
+  name: 'snooze_agenda_item',
+  description: 'Defer an agenda item by id for N days so Shaul stops mentioning it temporarily.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      id:   { type: 'NUMBER', description: 'Agenda item id' },
+      days: { type: 'NUMBER', description: 'How many days to snooze (default 3)' },
+    },
+    required: ['id'],
+  },
+};
+
+const MUTE_TOPIC_DECL = {
+  name: 'mute_topic',
+  description: 'Silence all agenda items of a given topic for N days.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      topic: { type: 'STRING', description: 'Topic slug (e.g. budget, campaign, post_ig)' },
+      days:  { type: 'NUMBER', description: 'Mute duration in days (default 7)' },
+    },
+    required: ['topic'],
+  },
+};
+
+const MARK_AGENDA_DONE_DECL = {
+  name: 'mark_agenda_done',
+  description: 'Mark an agenda item as done by id.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      id: { type: 'NUMBER', description: 'Agenda item id' },
+    },
+    required: ['id'],
+  },
+};
+
+const PIN_FACT_DECL = {
+  name: 'pin_fact',
+  description: 'Pin a key fact so it appears in every Shaul reply context. Use for things the user tells Shaul to always remember.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      key:   { type: 'STRING', description: 'Short label for the fact' },
+      value: { type: 'STRING', description: 'The fact value' },
+    },
+    required: ['key', 'value'],
+  },
+};
+
+const UNPIN_FACT_DECL = {
+  name: 'unpin_fact',
+  description: 'Remove a previously pinned fact by key.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      key: { type: 'STRING', description: 'The fact label to remove' },
+    },
+    required: ['key'],
+  },
+};
+
+function handleAgendaControlLocal({ chatId, toolName, args }) {
+  const userId = chatId;
+  switch (toolName) {
+    case 'snooze_agenda_item': {
+      const days = Number(args.days) || 3;
+      const until = new Date(Date.now() + days * 86400_000).toISOString();
+      setAgendaMute(Number(args.id), until);
+      return { status: 'ok', message: `Snoozed for ${days} days.` };
+    }
+    case 'mute_topic': {
+      const days = Number(args.days) || 7;
+      setAgendaMuteByTopic(userId, String(args.topic), days);
+      return { status: 'ok', message: `Topic "${args.topic}" muted for ${days} days.` };
+    }
+    case 'mark_agenda_done': {
+      setAgendaStatus(Number(args.id), 'done');
+      return { status: 'ok', message: 'Marked done.' };
+    }
+    case 'pin_fact': {
+      const existing = getMemory(userId, '_pinned_facts');
+      const pins = existing ? JSON.parse(existing) : {};
+      pins[String(args.key)] = String(args.value);
+      setMemory(userId, '_pinned_facts', JSON.stringify(pins));
+      return { status: 'ok', message: `Pinned: ${args.key} = ${args.value}` };
+    }
+    case 'unpin_fact': {
+      const existing = getMemory(userId, '_pinned_facts');
+      if (existing) {
+        const pins = JSON.parse(existing);
+        delete pins[String(args.key)];
+        setMemory(userId, '_pinned_facts', JSON.stringify(pins));
+      }
+      return { status: 'ok', message: `Unpinned: ${args.key}` };
+    }
+    default:
+      return { error: 'Unknown local tool' };
+  }
+}
+
+const AGENDA_CONTROL_TOOLS = [
+  SNOOZE_AGENDA_DECL, MUTE_TOPIC_DECL, MARK_AGENDA_DONE_DECL, PIN_FACT_DECL, UNPIN_FACT_DECL,
+];
+const AGENDA_CONTROL_NAMES = new Set(AGENDA_CONTROL_TOOLS.map(t => t.name));
+
 // --- Local function-tool: send_whatsapp_message ---
 // Approval-gated: when Gemini calls this, we DO NOT send. We register the
 // pending approval in cmo.js and wait for the user to type אשר/בטל. The user's
@@ -283,10 +394,11 @@ function maybeLogCalendarMutation({ chatId, toolName, args, response }) {
   }
 }
 
-async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false, includeSendEmail = false }) {
+async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false, includeSendEmail = false, includeAgendaTools = false }) {
   const declarations = [...mcpTools, ...extraTools];
   if (includeSendWhatsapp) declarations.push(SEND_WHATSAPP_DECL);
   if (includeSendEmail && isEmailConfigured()) declarations.push(SEND_EMAIL_DECL);
+  if (includeAgendaTools) declarations.push(...AGENDA_CONTROL_TOOLS);
 
   const chat = ai.chats.create({
     model: modelName,
@@ -310,6 +422,8 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
         response = await handleSendWhatsappLocal({ chatId, args: fc.args || {} });
       } else if (fc.name === 'send_email') {
         response = await handleSendEmailLocal({ args: fc.args || {} });
+      } else if (AGENDA_CONTROL_NAMES.has(fc.name)) {
+        response = handleAgendaControlLocal({ chatId, toolName: fc.name, args: fc.args || {} });
       } else {
         const c = toolToClientMap.get(fc.name);
         if (!c) throw new Error(`No MCP client registered for tool: ${fc.name}`);
@@ -668,13 +782,25 @@ client.on('ready', () => {
       if (now.getHours() !== BRIEFING_HOUR) return;
       const briefings = await getDailyBriefingsToSend({ ai, modelName });
       for (const b of briefings) {
-        try { await client.sendMessage(b.userId, b.text); }
-        catch (e) { console.error(`Briefing send failed for ${b.userId}:`, e.message); }
+        if (!canSendProactive(b.userId)) {
+          console.log(`[briefing] proactivity budget exhausted for ${b.userId}, skipping.`);
+          continue;
+        }
+        try {
+          await client.sendMessage(b.userId, b.text);
+          consumeProactiveBudget(b.userId);
+        } catch (e) { console.error(`Briefing send failed for ${b.userId}:`, e.message); }
+
+        // Run forgetting sweep once per user per day (alongside the daily briefing)
+        try { runForgettingSweep(b.userId); } catch (_) {}
       }
     } catch (err) {
       console.error('Daily-briefing loop error:', err.message);
     }
   }, 60 * 1000);
+
+  // Start Notion bidirectional poll loop (Notion → SQLite, every 5 min)
+  startNotionPollLoop(() => listAllUserIds());
 
   if (process.env.WHATSAPP_PHONE) {
     const me = `${process.env.WHATSAPP_PHONE}@c.us`;

@@ -3,7 +3,11 @@
 
 import { buildPrompt, runSubagent } from './common.js';
 
-export async function draftPost({ userId, brief, platform = 'instagram', ai, modelName, styleHint = null }) {
+export async function draftPost({ userId, brief, platform = 'instagram', ai, modelName, styleHint = null, formatHint = null }) {
+  const extras = [];
+  if (styleHint)  extras.push(`BRAND VISUAL STYLE (derived from existing Canva designs — match this):\n${styleHint}`);
+  if (formatHint) extras.push(`WINNING FORMAT PATTERNS (what has performed best for this user — bias toward these):\n${formatHint}`);
+
   const prompt = buildPrompt({
     userId,
     role: `You are the Creative — the copywriter of the marketing department.
@@ -20,9 +24,10 @@ Always tailor to the platform conventions:
   "body": "the post body, ready to publish, in Hebrew unless brief is English",
   "hashtags": "#tag1 #tag2 ...",
   "image_brief": "1-2 sentence visual description for an image to pair with this post",
+  "format_tags": { "tone": "formal|casual|urgent|inspirational", "hook_type": "question|statement|statistic|story", "length_bucket": "short|medium|long" },
   "rationale": "one sentence on why this will work for THIS user's ICP"
 }`,
-    extra: styleHint ? `BRAND VISUAL STYLE (derived from existing Canva designs — match this):\n${styleHint}` : '',
+    extra: extras.join('\n\n'),
   });
   const { json } = await runSubagent({ ai, modelName, prompt });
   return json;

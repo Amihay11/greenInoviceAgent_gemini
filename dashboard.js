@@ -227,6 +227,70 @@ function apiLogsTail(req, res) {
   }
 }
 
+// ── model API ────────────────────────────────────────────────────────────────
+
+const ALLOWED_MODELS = [
+  { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro',   note: 'חזק ביותר, איטי יותר' },
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', note: 'מהיר + חכם — מומלץ' },
+  { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', note: 'מהיר, חסכוני' },
+  { id: 'gemini-1.5-pro',   label: 'Gemini 1.5 Pro',   note: 'מודל ישן, stable' },
+  { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', note: 'מודל ישן, זול' },
+];
+
+function getModelFromDb(userId) {
+  const db = getMemDb();
+  if (!db) return null;
+  try {
+    const row = db.prepare(
+      `SELECT value FROM marketing_memory WHERE user_id = ? AND key = '_active_model'`
+    ).get(userId);
+    return row?.value ? row.value.replace(/^"|"$/g, '') : null;
+  } catch (_) { return null; }
+}
+
+function setModelInDb(userId, modelId) {
+  const db = getMemDb();
+  if (!db) throw new Error('DB not available');
+  db.prepare(`
+    INSERT INTO marketing_memory (user_id, key, value, updated_at)
+    VALUES (?, '_active_model', ?, datetime('now'))
+    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+  `).run(userId, JSON.stringify(modelId));
+}
+
+function getAllUserIds() {
+  const db = getMemDb();
+  if (!db) return [];
+  try {
+    return db.prepare('SELECT DISTINCT user_id FROM business_profile').all().map(r => r.user_id);
+  } catch (_) { return []; }
+}
+
+function apiModelGet(req, res) {
+  const url = new URL(req.url, `http://x`);
+  const userId = url.searchParams.get('userId') || getAllUserIds()[0] || null;
+  if (!userId) return sendJSON(res, 200, { models: ALLOWED_MODELS, current: null, userId: null });
+  const current = getModelFromDb(userId);
+  sendJSON(res, 200, { models: ALLOWED_MODELS, current, userId });
+}
+
+function apiModelSet(req, res) {
+  let body = '';
+  req.on('data', d => { body += d; });
+  req.on('end', () => {
+    try {
+      const { userId, modelId } = JSON.parse(body);
+      if (!ALLOWED_MODELS.find(m => m.id === modelId)) {
+        return sendJSON(res, 400, { ok: false, error: `Unknown model: ${modelId}` });
+      }
+      setModelInDb(userId, modelId);
+      sendJSON(res, 200, { ok: true, modelId, userId });
+    } catch (e) {
+      sendJSON(res, 400, { ok: false, error: e.message });
+    }
+  });
+}
+
 // ── memory API ───────────────────────────────────────────────────────────────
 
 function apiMemoryTables(req, res) {
@@ -497,6 +561,20 @@ function getDashboardHTML() {
   </div>
 </div>
 
+<div class="card" id="model-card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div style="font-size:.95rem;font-weight:600">🤖 AI Model</div>
+    <span id="model-current" style="font-size:.78rem;color:#9ca3af">טוען...</span>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <select id="model-select" style="flex:1;min-width:180px;background:#0f1117;color:#e2e8f0;border:1px solid #2a2d3e;border-radius:8px;padding:8px 10px;font-size:.85rem;cursor:pointer">
+      <option value="">בחר מודל...</option>
+    </select>
+    <button onclick="setModel()" style="padding:8px 16px;background:#4f46e5;color:#fff;border:none;border-radius:8px;font-size:.85rem;font-weight:600;cursor:pointer">החל</button>
+  </div>
+  <div id="model-error" style="color:#ef4444;font-size:.75rem;margin-top:6px;display:none"></div>
+</div>
+
 <div class="card">
   <div class="log-header">
     <div class="log-title">📋 Live Logs</div>
@@ -613,6 +691,53 @@ function startStream() {
 refreshStatus();
 setInterval(refreshStatus, 5000);
 startStream();
+
+// ── Model control ──────────────────────────────────────────────────────────
+let _modelUserId = null;
+async function loadModel() {
+  try {
+    const r = await fetch('/api/model');
+    const d = await r.json();
+    _modelUserId = d.userId;
+    const sel = document.getElementById('model-select');
+    sel.innerHTML = '<option value="">בחר מודל...</option>';
+    for (const m of (d.models || [])) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label + ' — ' + m.note;
+      if (m.id === d.current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    const cur = d.models?.find(m => m.id === d.current);
+    document.getElementById('model-current').textContent =
+      cur ? (cur.label + ' (' + cur.note + ')') : (d.current || 'ברירת מחדל מ-.env');
+  } catch (e) {
+    document.getElementById('model-current').textContent = 'שגיאה בטעינה';
+  }
+}
+
+async function setModel() {
+  const sel = document.getElementById('model-select');
+  const modelId = sel.value;
+  const errEl = document.getElementById('model-error');
+  errEl.style.display = 'none';
+  if (!modelId) { errEl.textContent = 'בחר מודל תחילה.'; errEl.style.display = 'block'; return; }
+  if (!_modelUserId) { errEl.textContent = 'לא נמצא userId — דבר עם שאול לפחות פעם אחת.'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await fetch('/api/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: _modelUserId, modelId }),
+    });
+    const d = await r.json();
+    if (d.ok) { showToast('מודל עודכן ✓', 'ok'); loadModel(); }
+    else { errEl.textContent = d.error || 'שגיאה'; errEl.style.display = 'block'; }
+  } catch (e) {
+    errEl.textContent = e.message; errEl.style.display = 'block';
+  }
+}
+
+loadModel();
 </script>
 </body>
 </html>`;
@@ -638,6 +763,8 @@ const server = http.createServer((req, res) => {
   else if (m === 'GET'  && p === '/api/memory/tables') return apiMemoryTables(req, res);
   else if (m === 'GET'  && p === '/api/memory/rows')   return apiMemoryRows(req, res);
   else if (m === 'POST' && p === '/api/memory/delete') return apiMemoryDelete(req, res);
+  else if (m === 'GET'  && p === '/api/model')         return apiModelGet(req, res);
+  else if (m === 'POST' && p === '/api/model')         return apiModelSet(req, res);
   else { res.writeHead(404); res.end('Not found'); }
 });
 

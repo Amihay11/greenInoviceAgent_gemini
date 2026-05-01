@@ -12,11 +12,12 @@
 
 import { buildPrompt, runSubagent } from './common.js';
 import {
-  getProfile, listAgenda, addAgendaItem, setAgendaStatus, clearStaleAgenda,
-  listGoals, listCampaigns, listPosts, recentInsights, recentAttendance,
-  recentInteractions, alreadyBriefedToday, logBriefing, listAllUserIds,
-  buildContextBundle, formatContextForPrompt,
+  getProfile, listAgenda, addAgendaItem, setAgendaStatus, setAgendaTopic,
+  clearStaleAgenda, listGoals, listCampaigns, listPosts, recentInsights,
+  recentAttendance, recentInteractions, alreadyBriefedToday, logBriefing,
+  listAllUserIds, listEligibleAgenda,
 } from '../memory.js';
+import { buildCoreMemoryBlock } from '../coreMemory.js';
 
 // ── Decide what's next ───────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ export async function nextBestActions({ userId, ai, modelName, max = 5 }) {
 
   const prompt = buildPrompt({
     userId,
-    role: `You are the Director — Shaul's head of marketing strategy. You take ownership of the user's marketing. You don't wait. You look at what is known and decide the highest-leverage actions Shaul should TAKE next. The user is your boss; you save them time by drafting work for them to approve, not by asking them to do anything.
+    role: `You are the Director — Shaul's head of marketing strategy. You serve the user's marketing needs. You look at what is known and propose the highest-leverage actions Shaul should TAKE next. The user is your boss; you save them time by drafting work for them to approve.
 
 TODAY'S DATE: ${today}. ALL due_at values MUST be on or after ${today}. Never produce a date in the past.
 
@@ -56,7 +57,9 @@ Action kinds Shaul can do:
 PROFILE FIELDS ALREADY KNOWN (do NOT probe for these): ${knownFields.join(', ') || '(none)'}
 ACTIVE GOALS ALREADY SET: ${goals.length} goal(s) — ${goals.length > 0 ? 'do NOT propose another probe for "what is the goal"' : 'goal probing IS allowed'}.
 
-Prefer drafting and planning over probing. The user said they want Shaul to WORK, not interrogate.`,
+Prefer drafting and planning over probing. The user wants Shaul to WORK, not interrogate.
+
+TOPIC FIELD: for each action, include a "topic" slug matching one of: campaign, post_ig, post_fb, canva, invoice, calendar, insights, attendance, email, budget, general.`,
     task: `Look at everything in memory. What are the next ${max} highest-leverage moves Shaul should DO this week? Drafting > probing. Today is ${today}.`,
     schemaHint: `{
   "actions": [
@@ -64,6 +67,7 @@ Prefer drafting and planning over probing. The user said they want Shaul to WORK
       "kind": "draft_post|plan_campaign|pull_metrics|check_attendance|probe_user|revise_campaign|reflect|draft_calendar",
       "title": "short Hebrew title (≤60 chars) — what Shaul will DO",
       "detail": "1-2 sentence specifics on what to draft / which campaign / which question",
+      "topic": "campaign|post_ig|post_fb|canva|invoice|calendar|insights|attendance|email|budget|general",
       "priority": 1-10,
       "due_at": "YYYY-MM-DD on or after ${today}"|null,
       "execute_immediately": true|false
@@ -110,6 +114,7 @@ export async function refreshAgenda({ userId, ai, modelName }) {
       priority: Math.max(1, Math.min(10, a.priority || 5)),
       due_at: a.due_at || null,
     });
+    if (a.topic) setAgendaTopic(id, a.topic);
     added.push({ id, ...a });
   }
   return added;
@@ -118,8 +123,9 @@ export async function refreshAgenda({ userId, ai, modelName }) {
 // ── Daily briefing — proactive morning push ─────────────────────────────────
 
 export async function composeDailyBriefing({ userId, ai, modelName }) {
-  const ctx = formatContextForPrompt(buildContextBundle(userId));
-  const agenda = listAgenda(userId, 'pending', 5);
+  const ctx = buildCoreMemoryBlock(userId);
+  // Use anti-nag-filtered agenda for briefing — don't re-surface snoozed items
+  const agenda = listEligibleAgenda(userId, null, 3);
   const recent = recentInteractions(userId, 6);
 
   const prompt = `${ctx}
