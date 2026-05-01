@@ -109,6 +109,7 @@ All tables are written on every turn and survive restarts.
 | `calendar_events` | Audit trail of Calendar mutations |
 | `outbound_messages` | Every proactive WhatsApp DM sent on your behalf |
 | `marketing_memory` | Generic key/value store (style profiles, pinned facts, active model) |
+| `content_edges` | Knowledge graph edges: relationships between posts, campaigns, insights, entities |
 
 ### Layer 2 — Core Memory Block (`coreMemory.js`)
 
@@ -145,6 +146,86 @@ Top-k results are injected as a `## RELEVANT MEMORY` block below the core block.
 ### Layer 4 — External Mirror (Notion)
 
 Notion is a **human-readable mirror** of SQLite — not the primary store. See [Notion Mirror](#notion-mirror-bidirectional).
+
+---
+
+## Knowledge Graph
+
+The `content_edges` table tracks directional relationships between every piece of content Shaul manages.
+
+### Edge schema
+
+```
+content_edges(user_id, from_type, from_id, to_type, to_id, relation, weight, access_count, last_accessed_at)
+```
+
+### Relation types
+
+| Relation | Meaning | Auto-wired when |
+|---|---|---|
+| `part_of` | Post belongs to a campaign | Post saved after approval |
+| `repurposed_from` | This post was derived from an older post/campaign | Canva `design_like` flow |
+| `similar_to` | Two posts share format/topic | `getTopFormats` clusters |
+| `mentions` | Post caption mentions a known entity | Post saved, entity names scanned |
+| `outcome_of` | Insight produced by campaign metrics | `refineCampaign` produces insight |
+| `follows_up` | Outbound DM follows up an entity/goal | `dm_client` flow |
+
+### API (`knowledgeGraph.js`)
+
+| Function | Purpose |
+|---|---|
+| `addEdge(...)` | Upsert edge; weight-averages on conflict |
+| `getRelated(...)` | All edges from a node; bumps access_count |
+| `findRepurposable(userId)` | Campaigns >30 days old with no repurposed children — surfaced in `recallProcedural` |
+| `touchEdge(edgeId)` | Bump access count on a specific edge |
+| `getContentChain(userId, postId)` | BFS lineage tree up to 3 hops |
+
+### Notion mirror
+
+Edges sync to **"🕸️ גרף תוכן שאול"** (a Notion DB under your memory parent page). Each edge becomes a row with From / To / Relation / Weight / Date properties. Archived pages in Notion delete the SQLite edge on the next 5-minute poll.
+
+---
+
+## Forgetting Algorithm
+
+Shaul's memory works like a human brain: rarely-accessed items decay and get archived silently; frequently-used items grow stronger.
+
+### Formula
+
+```
+activation(item) = ln(access_count + 1) × e^(−decay_rate × days_since_last_access)
+```
+
+| Parameter | Value | Condition |
+|---|---|---|
+| `decay_rate` | 0.1 | High-confidence (≥ 0.7) or frequently-accessed (≥ 5 times) |
+| `decay_rate` | 0.3 | New or rarely-accessed items |
+| Archive threshold | activation < 0.05 | Item is archived silently |
+| Near-forgetting | 0.05 < activation < 0.15 | Item surfaced in Mentor's weekly reflection |
+
+The logarithmic growth (`ln(access_count + 1)`) mirrors human memory: each retrieval strengthens the item but with diminishing returns. The exponential decay (`e^(−rate × days)`) follows the Ebbinghaus forgetting curve.
+
+### What gets archived
+
+| Table | Archive condition |
+|---|---|
+| `learned_insights` | activation < 0.05 AND status is not active/done |
+| `entities` | activation < 0.05 |
+| `campaigns` | activation < 0.05 AND status is draft/paused |
+| `posts`, `goals`, `reflections` | Never auto-archived |
+
+### How items are strengthened
+
+- **On every retrieval** (`longTerm.js`): `touchMemory(table, id)` bumps `access_count + 1` and sets `last_accessed_at = now`
+- **Content edges**: `touchEdge(edgeId)` strengthens edges on every `getRelated()` call
+
+### Daily sweep
+
+`runForgettingSweep(userId)` runs once per day alongside the morning briefing (at `SHAUL_BRIEFING_HOUR`). It silently archives items whose activation has dropped below 0.05.
+
+### Near-forgetting in reflection
+
+`mk reflect` (or the daily reflection flow) includes items in the 0.05–0.15 band in the Mentor prompt. Shaul can decide to explicitly recall them (which strengthens them) or let them fade naturally.
 
 ---
 
@@ -372,6 +453,7 @@ Notion is a **human-readable mirror** of SQLite — not the primary store. SQLit
 | 💡 תובנות שאול | `learned_insights` | SQLite → Notion (on every new insight) |
 | 🎯 מטרות עסקיות | `goals` | SQLite → Notion (on create + status change) |
 | 📋 אג׳נדה שאול | `agenda_items` | **Bidirectional** (5-minute poll) |
+| 🕸️ גרף תוכן שאול | `content_edges` | SQLite → Notion (on every new edge); archived Notion pages delete the edge |
 
 ### Notion → SQLite (bidirectional)
 
@@ -380,6 +462,7 @@ Every 5 minutes, `startNotionPollLoop` pulls changes made directly in Notion bac
 - **Agenda**: status changes (done/skipped/pending) and priority edits sync back
 - **Goals**: status, target, and deadline edits sync back
 - **Profile**: any field edits sync back
+- **Content edges**: pages archived in Notion are deleted from SQLite
 
 This means you can open Notion on your phone, mark an agenda item as done, change a goal deadline, or update your brand voice — and Shaul will see it within 5 minutes.
 
@@ -591,9 +674,11 @@ greenInoviceAgent_gemini/
 │   │
 │   └── marketing/
 │       ├── cmo.js                # CMO orchestrator — classifier, flows, approval gates
-│       ├── memory.js             # SQLite schema + all read/write helpers (17 tables)
+│       ├── memory.js             # SQLite schema + all read/write helpers (18 tables)
 │       ├── coreMemory.js         # Layer 2: always-in-context block + anti-nag filter
-│       ├── longTerm.js           # Layer 3: episodic/semantic/procedural retrieval
+│       ├── longTerm.js           # Layer 3: episodic/semantic/procedural retrieval + touch
+│       ├── knowledgeGraph.js     # Knowledge graph: addEdge, getRelated, findRepurposable
+│       ├── forgetting.js         # Activation formula, daily sweep, near-forgetting surface
 │       ├── notion-memory.js      # Notion sync (SQLite→Notion + poll Notion→SQLite)
 │       ├── notion-id-cache.js    # Notion page ID cache (stored in marketing_memory)
 │       ├── meta.js               # Facebook + Instagram Graph API

@@ -263,6 +263,24 @@ function initSchema(db) {
       updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (user_id, key)
     );
+
+    -- Phase 7: knowledge graph edges between content items.
+    CREATE TABLE IF NOT EXISTS content_edges (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id          TEXT NOT NULL,
+      from_type        TEXT NOT NULL,
+      from_id          INTEGER NOT NULL,
+      to_type          TEXT NOT NULL,
+      to_id            INTEGER NOT NULL,
+      relation         TEXT NOT NULL,
+      weight           REAL NOT NULL DEFAULT 1.0,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      access_count     INTEGER NOT NULL DEFAULT 0,
+      last_accessed_at TEXT,
+      UNIQUE(user_id, from_type, from_id, to_type, to_id, relation)
+    );
+    CREATE INDEX IF NOT EXISTS idx_edges_from ON content_edges(user_id, from_type, from_id);
+    CREATE INDEX IF NOT EXISTS idx_edges_to   ON content_edges(user_id, to_type, to_id);
   `);
 
   // Phase 5: anti-nag columns on agenda_items (idempotent migration).
@@ -288,6 +306,39 @@ function initSchema(db) {
   if (!postCols.includes('performance_score')) {
     db.exec(`ALTER TABLE posts ADD COLUMN performance_score REAL`);
   }
+
+  // Phase 7: forgetting algorithm — access tracking on all memory tables.
+  // learned_insights + status for archiving
+  const insightCols = db.prepare("PRAGMA table_info(learned_insights)").all().map(c => c.name);
+  if (!insightCols.includes('access_count'))     db.exec(`ALTER TABLE learned_insights ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!insightCols.includes('last_accessed_at')) db.exec(`ALTER TABLE learned_insights ADD COLUMN last_accessed_at TEXT`);
+  if (!insightCols.includes('status'))           db.exec(`ALTER TABLE learned_insights ADD COLUMN status TEXT`);
+
+  // entities + status for archiving
+  const entityCols = db.prepare("PRAGMA table_info(entities)").all().map(c => c.name);
+  if (!entityCols.includes('access_count'))     db.exec(`ALTER TABLE entities ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!entityCols.includes('last_accessed_at')) db.exec(`ALTER TABLE entities ADD COLUMN last_accessed_at TEXT`);
+  if (!entityCols.includes('status'))           db.exec(`ALTER TABLE entities ADD COLUMN status TEXT`);
+
+  // goals + pinned flag (pinned goals never archived)
+  const goalCols = db.prepare("PRAGMA table_info(goals)").all().map(c => c.name);
+  if (!goalCols.includes('access_count'))     db.exec(`ALTER TABLE goals ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!goalCols.includes('last_accessed_at')) db.exec(`ALTER TABLE goals ADD COLUMN last_accessed_at TEXT`);
+  if (!goalCols.includes('pinned'))           db.exec(`ALTER TABLE goals ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+
+  // campaigns
+  const campCols = db.prepare("PRAGMA table_info(campaigns)").all().map(c => c.name);
+  if (!campCols.includes('access_count'))     db.exec(`ALTER TABLE campaigns ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!campCols.includes('last_accessed_at')) db.exec(`ALTER TABLE campaigns ADD COLUMN last_accessed_at TEXT`);
+
+  // posts
+  if (!postCols.includes('access_count'))     db.exec(`ALTER TABLE posts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!postCols.includes('last_accessed_at')) db.exec(`ALTER TABLE posts ADD COLUMN last_accessed_at TEXT`);
+
+  // reflections
+  const reflCols = db.prepare("PRAGMA table_info(reflections)").all().map(c => c.name);
+  if (!reflCols.includes('access_count'))     db.exec(`ALTER TABLE reflections ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
+  if (!reflCols.includes('last_accessed_at')) db.exec(`ALTER TABLE reflections ADD COLUMN last_accessed_at TEXT`);
 }
 
 // ── business_profile ──────────────────────────────────────────────────────────
@@ -357,7 +408,8 @@ export function addInsight({ userId, topic, insight, confidence = 0.6, source = 
 
 export function listInsights(userId, limit = 50) {
   return getDb().prepare(`
-    SELECT * FROM learned_insights WHERE user_id = ?
+    SELECT * FROM learned_insights
+    WHERE user_id = ? AND (status IS NULL OR status != 'archived')
     ORDER BY confidence DESC, updated_at DESC LIMIT ?
   `).all(userId, limit);
 }
@@ -373,9 +425,15 @@ export function upsertEntity({ userId, kind, name, details = null }) {
 
 export function listEntities(userId, kind = null) {
   if (kind) {
-    return getDb().prepare('SELECT * FROM entities WHERE user_id = ? AND kind = ?').all(userId, kind);
+    return getDb().prepare(
+      `SELECT * FROM entities WHERE user_id = ? AND kind = ?
+       AND (status IS NULL OR status != 'archived')`
+    ).all(userId, kind);
   }
-  return getDb().prepare('SELECT * FROM entities WHERE user_id = ?').all(userId);
+  return getDb().prepare(
+    `SELECT * FROM entities WHERE user_id = ?
+     AND (status IS NULL OR status != 'archived')`
+  ).all(userId);
 }
 
 // ── campaigns ─────────────────────────────────────────────────────────────────

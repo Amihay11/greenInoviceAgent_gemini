@@ -5,11 +5,13 @@
 //   learned_insights  → "💡 תובנות שאול"
 //   goals             → "🎯 מטרות עסקיות"
 //   agenda_items      → "📋 אג׳נדה שאול"
+//   content_edges     → "🕸️ גרף תוכן שאול"
 //
 // Notion → SQLite (pull, called by the polling scheduler):
 //   pullAgendaFromNotion  — picks up Status/Priority edits made directly in Notion
 //   pullGoalsFromNotion   — picks up Status/Target edits
 //   pullProfileFromNotion — picks up any field edits
+//   pullEdgesFromNotion   — syncs archived state back from Notion
 //
 // All writes are fire-and-forget — a Notion failure never blocks the agent.
 // Polling runs every 5 minutes via startNotionPollLoop() called from index.js.
@@ -125,6 +127,23 @@ async function agendaDbId(userId) {
   });
 }
 
+async function edgesDbId(userId) {
+  return getOrCreateDb(userId, 'notion_edges_db_id', '🕸️ גרף תוכן שאול', {
+    Name:     { title: {} },
+    To:       { rich_text: {} },
+    Relation: { select: { options: [
+      { name: 'repurposed_from', color: 'blue'   },
+      { name: 'part_of',        color: 'green'  },
+      { name: 'similar_to',     color: 'yellow' },
+      { name: 'mentions',       color: 'orange' },
+      { name: 'outcome_of',     color: 'purple' },
+      { name: 'follows_up',     color: 'pink'   },
+    ]}},
+    Weight:   { number: { format: 'number' } },
+    Date:     { date: {} },
+  });
+}
+
 // ── Sync functions ────────────────────────────────────────────────────────────
 
 export async function syncProfileToNotion(userId, profile) {
@@ -232,6 +251,30 @@ export async function syncAgendaStatusToNotion(userId, id, status) {
     });
   } catch (err) {
     console.error('[Notion] agenda status sync failed:', err.message);
+  }
+}
+
+export async function syncEdgeToNotion(userId, edge) {
+  if (!isEnabled()) return;
+  const notion = getNotion();
+  try {
+    const dbId = await edgesDbId(userId);
+    const props = {
+      Name:     { title: [{ text: { content: `${edge.from_type}:${edge.from_id} → ${edge.relation}` } }] },
+      To:       rt(`${edge.to_type}:${edge.to_id}`),
+      Relation: { select: { name: edge.relation } },
+      Weight:   { number: edge.weight ?? 1.0 },
+      Date:     { date: { start: (edge.created_at || new Date().toISOString()).slice(0, 10) } },
+    };
+    const cached = cache.get(userId, `notion_edge_${edge.id}`);
+    if (cached) {
+      await notion.pages.update({ page_id: cached, properties: props });
+    } else {
+      const page = await notion.pages.create({ parent: { database_id: dbId }, properties: props });
+      cache.set(userId, `notion_edge_${edge.id}`, page.id);
+    }
+  } catch (err) {
+    console.error('[Notion] edge sync failed:', err.message);
   }
 }
 
@@ -358,6 +401,30 @@ export async function pullProfileFromNotion(userId) {
   }
 }
 
+export async function pullEdgesFromNotion(userId) {
+  if (!isEnabled()) return;
+  const notion = getNotion();
+  try {
+    const dbId = cache.get(userId, 'notion_edges_db_id');
+    if (!dbId) return;
+
+    const { results } = await notion.databases.query({ database_id: dbId });
+    const { getDb } = await import('./memory.js');
+    const db = getDb();
+    for (const page of results) {
+      if (!page.archived) continue;
+      const sqliteId = findCachedSqliteId(userId, 'notion_edge_', page.id);
+      if (!sqliteId) continue;
+      try {
+        db.prepare(`DELETE FROM content_edges WHERE id = ?`).run(sqliteId);
+        cache.set(userId, `notion_edge_${sqliteId}`, null);
+      } catch (_) {}
+    }
+  } catch (err) {
+    console.error('[Notion←] edges pull failed:', err.message);
+  }
+}
+
 // Reverse-lookup: find the SQLite numeric id for a Notion page id by scanning
 // the in-memory cache keys matching the given prefix.
 function findCachedSqliteId(userId, prefix, notionPageId) {
@@ -381,6 +448,7 @@ export function startNotionPollLoop(getUserIds, intervalMs = 5 * 60 * 1000) {
       await pullAgendaFromNotion(userId).catch(() => {});
       await pullGoalsFromNotion(userId).catch(() => {});
       await pullProfileFromNotion(userId).catch(() => {});
+      await pullEdgesFromNotion(userId).catch(() => {});
     }
   }, intervalMs);
   console.log('[Notion←] Bidirectional poll loop started (every', intervalMs / 60000, 'min)');

@@ -20,6 +20,8 @@ import {
   listGoals, listCampaigns, listPosts, recentReflections,
   getDb,
 } from './memory.js';
+import { touchMemory } from './forgetting.js';
+import { findRepurposable } from './knowledgeGraph.js';
 
 // ── Similarity ────────────────────────────────────────────────────────────────
 
@@ -64,13 +66,13 @@ export function recallEpisodic({ userId, query, k = 5 }) {
 
   const candidates = [
     ...interactions.map(i => ({
-      kind: 'interaction',
+      kind: 'interaction', id: i.id, table: null, // interactions not touch-tracked
       text: `${i.role}: ${i.content}`,
       date: i.created_at,
       importance: i.role === 'user' ? 0.5 : 0.4,
     })),
     ...attendance.map(a => ({
-      kind: 'attendance',
+      kind: 'attendance', id: a.id, table: 'attendance',
       text: `${a.session_label}: ${a.headcount} אנשים${a.revenue ? `, ₪${a.revenue}` : ''}`,
       date: a.session_date || a.created_at,
       importance: 0.7,
@@ -92,19 +94,19 @@ export function recallSemantic({ userId, query, k = 5 }) {
 
   const candidates = [
     ...insights.map(i => ({
-      kind: 'insight',
+      kind: 'insight', id: i.id, table: 'learned_insights',
       text: `[${i.topic}] ${i.insight}`,
       date: i.created_at,
       importance: i.confidence || 0.6,
     })),
     ...goals.map(g => ({
-      kind: 'goal',
+      kind: 'goal', id: g.id, table: 'goals',
       text: `מטרה: ${g.title}${g.target ? ` (יעד: ${g.target} ${g.metric || ''})` : ''}`,
       date: g.created_at,
       importance: 0.8,
     })),
     ...entities.map(e => ({
-      kind: 'entity',
+      kind: 'entity', id: e.id, table: 'entities',
       text: `[${e.kind}] ${e.name}${e.details ? ': ' + e.details : ''}`,
       date: e.created_at,
       importance: 0.5,
@@ -124,26 +126,37 @@ export function recallProcedural({ userId, query, k = 5 }) {
 
   const candidates = [
     ...campaigns.map(c => ({
-      kind: 'campaign',
+      kind: 'campaign', id: c.id, table: 'campaigns',
       text: `קמפיין "${c.name}" (${c.status}): ${c.objective || ''}`,
       date: c.created_at,
       importance: c.status === 'active' ? 0.9 : 0.5,
     })),
     ...posts.map(p => ({
-      kind: 'post',
+      kind: 'post', id: p.id, table: 'posts',
       text: `פוסט ${p.platform} (${p.status}): ${(p.caption || '').slice(0, 120)}`,
       date: p.created_at,
       importance: p.status === 'published' ? 0.7 : 0.4,
     })),
     ...reflections.map(r => ({
-      kind: 'reflection',
+      kind: 'reflection', id: r.id, table: 'reflections',
       text: r.summary,
       date: r.created_at,
       importance: 0.6,
     })),
   ];
 
-  return rank(candidates, query, k, 21);
+  // Append repurposable campaigns as high-value candidates so Mentor sees them
+  const repurposable = findRepurposable(userId, 3);
+  for (const c of repurposable) {
+    candidates.push({
+      kind: 'repurpose', id: c.id, table: 'campaigns',
+      text: `[repurpose] קמפיין "${c.name}" — ${c.objective || ''} (מומלץ לרענן תוכן)`,
+      date: c.created_at,
+      importance: 0.9,
+    });
+  }
+
+  return rank(candidates, query, k + repurposable.length, 21);
 }
 
 // ── Shared ranker ─────────────────────────────────────────────────────────────
@@ -160,7 +173,10 @@ function rank(candidates, query, k, halfLifeDays) {
     }))
     .sort((a, b) => b._score - a._score)
     .slice(0, k)
-    .map(({ _score, ...rest }) => rest);
+    .map(({ _score, ...rest }) => {
+      if (rest.table && rest.id) touchMemory(rest.table, rest.id);
+      return rest;
+    });
 }
 
 // ── Convenience: format results for prompt injection ─────────────────────────

@@ -17,13 +17,14 @@ import {
   createPost, getPost, listPosts, setPostStatus, dueScheduledPosts,
   tagPostFormat, autoScorePostsFromInsights, getTopFormats,
   recentInsights, listGoals, addGoal,
-  addInsight, upsertEntity, logAttendance, recentAttendance,
+  addInsight, upsertEntity, listEntities, logAttendance, recentAttendance,
   listAgenda, addAgendaItem, setAgendaStatus,
   bumpAgendaNudge, setAgendaMute, setAgendaMuteByTopic,
   buildContextBundle, formatContextForPrompt,
   logOutboundMessage, recentCalendarEvents, getMemory, setMemory,
   getAllowedModels, getActiveModel, setActiveModel,
 } from './memory.js';
+import { addEdge } from './knowledgeGraph.js';
 import * as strategist from './subagents/strategist.js';
 import * as creative from './subagents/creative.js';
 import * as campaignMgr from './subagents/campaignManager.js';
@@ -332,6 +333,20 @@ async function silentExtraction({ userId, userMessage, ai, modelName }) {
 
   // After extraction, refresh the agenda so Director surfaces new actions.
   try { await director.refreshAgenda({ userId, ai, modelName }); } catch (_) {}
+}
+
+// Wire knowledge-graph mentions edges: check entity names against post caption.
+function _wireEntityMentions(userId, postId, captionText) {
+  if (!captionText) return;
+  const lower = captionText.toLowerCase();
+  try {
+    const entities = listEntities(userId);
+    for (const e of entities) {
+      if (e.name && lower.includes(e.name.toLowerCase())) {
+        addEdge({ userId, fromType: 'post', fromId: postId, toType: 'entity', toId: e.id, relation: 'mentions', weight: 0.8 });
+      }
+    }
+  } catch (_) {}
 }
 
 // Bump nudge count on any pending agenda item whose title appears in the reply.
@@ -1167,6 +1182,12 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
       status: 'approved',
     });
     const postId = createPost({ userId, creativeId, platform: 'instagram', caption, image_url: imageUrl, status: 'approved' });
+    // Knowledge graph: wire post → campaign (part_of) and post → entities (mentions)
+    const canvaCreative = getCreative(creativeId);
+    if (canvaCreative?.campaign_id) {
+      addEdge({ userId, fromType: 'post', fromId: postId, toType: 'campaign', toId: canvaCreative.campaign_id, relation: 'part_of', weight: 1.0 });
+    }
+    _wireEntityMentions(userId, postId, caption);
     if (!meta.isConfigured()) {
       setPostStatus(postId, 'pending_approval');
       return reply(userId, `💾 הפוסט נשמר (#${postId}) אבל Meta API לא מוגדר.`);
@@ -1237,6 +1258,12 @@ async function executeApproved(pending, { chatId, ai, modelName, runGeminiWithTo
     });
     // Persist format tags for analytics feedback loop
     if (draft.format_tags) tagPostFormat(postId, draft.format_tags);
+    // Knowledge graph: wire post → campaign (part_of) and post → entities (mentions)
+    const savedCreative = getCreative(creativeId);
+    if (savedCreative?.campaign_id) {
+      addEdge({ userId, fromType: 'post', fromId: postId, toType: 'campaign', toId: savedCreative.campaign_id, relation: 'part_of', weight: 1.0 });
+    }
+    _wireEntityMentions(userId, postId, caption);
 
     if (!meta.isConfigured()) {
       setPostStatus(postId, 'pending_approval');

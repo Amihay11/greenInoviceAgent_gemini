@@ -8,6 +8,7 @@ import {
 } from '../memory.js';
 import { buildCoreMemoryBlock, detectTopic } from '../coreMemory.js';
 import { recallEpisodic, recallSemantic, recallProcedural, formatRecallForPrompt } from '../longTerm.js';
+import { nearForgettingItems } from '../forgetting.js';
 import { buildToolsBlock } from '../../personality/shaul.js';
 
 export async function mentorReply({ userId, userMessage, ai, modelName, runGeminiWithTools = null, toolsBlock = '', sessionHistory = [] }) {
@@ -78,6 +79,11 @@ export async function reflect({ userId, ai, modelName }) {
   const campaigns    = listCampaigns(userId);
   const insights     = recentInsights(userId, 30);
 
+  const fadingItems = nearForgettingItems(userId, 5);
+  const fadingNote = fadingItems.length > 0
+    ? `\n\nItems close to being forgotten (you haven't accessed them in a while):\n${fadingItems.map(i => `  - [${i.table}] ${i.text} (activation: ${i.activation.toFixed(3)})`).join('\n')}\nFor each one: should you recall it explicitly now, or let it fade?`
+    : '';
+
   const prompt = buildPrompt({
     userId,
     role: `You are Shaul in self-reflection mode. Evaluate YOUR OWN performance as the user's marketing employee.
@@ -86,7 +92,7 @@ Read everything that happened recently and answer:
   2. What worked? What didn't?
   3. What should you adjust next week to serve them better?
 Be honest. If a campaign flopped, say it.`,
-    task: `Recent interactions:\n${JSON.stringify(interactions.slice(0, 30), null, 2)}\n\nCampaigns:\n${JSON.stringify(campaigns, null, 2)}\n\nRecent metrics:\n${JSON.stringify(insights, null, 2)}`,
+    task: `Recent interactions:\n${JSON.stringify(interactions.slice(0, 30), null, 2)}\n\nCampaigns:\n${JSON.stringify(campaigns, null, 2)}\n\nRecent metrics:\n${JSON.stringify(insights, null, 2)}${fadingNote}`,
     schemaHint: `{
   "summary": "2-4 sentence reflection in Hebrew",
   "next_moves": "what YOU (Shaul) will adjust next week — 1-3 sentences",

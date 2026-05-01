@@ -34,6 +34,7 @@ import {
 import { parseAllowList, normalizeJid } from './marketing/jid.js';
 import { logCalendarEvent, bumpAgendaNudge, setAgendaMute, setAgendaMuteByTopic, setAgendaStatus, listAgenda, getMemory, setMemory, listAllUserIds } from './marketing/memory.js';
 import { startNotionPollLoop } from './marketing/notion-memory.js';
+import { runForgettingSweep } from './marketing/forgetting.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -789,6 +790,9 @@ client.on('ready', () => {
           await client.sendMessage(b.userId, b.text);
           consumeProactiveBudget(b.userId);
         } catch (e) { console.error(`Briefing send failed for ${b.userId}:`, e.message); }
+
+        // Run forgetting sweep once per user per day (alongside the daily briefing)
+        try { runForgettingSweep(b.userId); } catch (_) {}
       }
     } catch (err) {
       console.error('Daily-briefing loop error:', err.message);
