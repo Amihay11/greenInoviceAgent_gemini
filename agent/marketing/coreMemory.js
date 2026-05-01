@@ -43,12 +43,36 @@ export function detectTopic(userMessage) {
   return null;
 }
 
+const FULL_TOPICS = new Set(['campaign', 'post_ig', 'post_fb', 'canva', 'budget', 'insights']);
+const FULL_RE     = /תכנון|תוכנית|plan|briefing|דוח|ניתוח/i;
+const MINIMAL_RE  = /^mk |זיכרון|מודל|memory|models|tools/i;
+
+function _tier(userMessage) {
+  if (!userMessage) return 'standard';
+  if (MINIMAL_RE.test(userMessage)) return 'minimal';
+  const topic = detectTopic(userMessage);
+  if ((topic && FULL_TOPICS.has(topic)) || FULL_RE.test(userMessage)) return 'full';
+  return 'standard';
+}
+
 export function buildCoreMemoryBlock(userId, { currentUserMessage = '' } = {}) {
+  const tier = _tier(currentUserMessage);
   const currentTopic = detectTopic(currentUserMessage);
   const lines = [];
 
-  // ── Business profile essentials ──────────────────────────────────────────
   const profile = getProfile(userId);
+
+  if (tier === 'minimal') {
+    // Only identity essentials — saves tokens for system/tool queries.
+    if (profile) {
+      lines.push('## BUSINESS PROFILE');
+      if (profile.business_name) lines.push(`- שם: ${profile.business_name}`);
+      if (profile.offer)         lines.push(`- מה מוכרים: ${profile.offer}`);
+    }
+    return lines.join('\n');
+  }
+
+  // ── Business profile essentials ──────────────────────────────────────────
   if (profile) {
     lines.push('## BUSINESS PROFILE');
     const essentials = [
@@ -64,8 +88,9 @@ export function buildCoreMemoryBlock(userId, { currentUserMessage = '' } = {}) {
     }
   }
 
-  // ── Active goals (top 3) ──────────────────────────────────────────────────
-  const goals = listGoals(userId, 'active').slice(0, 3);
+  // ── Active goals — top 3 for full, top 2 for standard ────────────────────
+  const goalLimit = tier === 'full' ? 3 : 2;
+  const goals = listGoals(userId, 'active').slice(0, goalLimit);
   if (goals.length) {
     lines.push('\n## ACTIVE GOALS');
     for (const g of goals) {
@@ -75,8 +100,11 @@ export function buildCoreMemoryBlock(userId, { currentUserMessage = '' } = {}) {
     }
   }
 
+  if (tier === 'standard') return lines.join('\n');
+
+  // ── Full tier only below ─────────────────────────────────────────────────
+
   // ── Pinned facts (user/Shaul-pinned key insights) ─────────────────────────
-  // Keys stored as "pin:<label>" in marketing_memory
   const pinnedRaw = getMemory(userId, '_pinned_facts');
   if (pinnedRaw) {
     try {

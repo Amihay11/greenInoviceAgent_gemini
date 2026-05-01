@@ -32,6 +32,19 @@ Use the user's monthly_budget from memory to set budget_total proportionally; if
   return json;
 }
 
+// Phase 5: refinePlan — incorporate Analyst critique into a polished plan.
+// Only called when critique.concerns.length > 0.
+export async function refinePlan({ userId, plan, critique, ai, modelName }) {
+  const prompt = buildPrompt({
+    userId,
+    role: `You are the Campaign Manager. You have a draft plan and an internal critique. Produce a revised plan that addresses the concerns. Keep the same schema.`,
+    task: `Original plan:\n${JSON.stringify(plan, null, 2)}\n\nCritique:\n${JSON.stringify(critique, null, 2)}\n\nReturn a revised plan that fixes the concerns while keeping the user's goal intact.`,
+    schemaHint: `Same schema as planCampaign — the full campaign plan object.`,
+  });
+  const { json } = await runSubagent({ ai, modelName, prompt });
+  return json || plan; // fallback to original if revision fails
+}
+
 export async function reviewCampaign({ userId, campaign, recentInsights, ai, modelName }) {
   const prompt = buildPrompt({
     userId,

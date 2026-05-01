@@ -14,7 +14,9 @@
 //   runForgettingSweep(userId)   — call once per day (index.js daily scheduler)
 //   nearForgettingItems(userId)  — call in reflect() so Mentor can decide to recall or let fade
 
-import { getDb } from './memory.js';
+import { getDb, setMemory, getMemory } from './memory.js';
+
+const VECTOR_THRESHOLD = parseInt(process.env.SHAUL_VECTOR_THRESHOLD || '150', 10);
 
 const ARCHIVE_THRESHOLD = 0.05;
 const NEAR_THRESHOLD    = 0.15;
@@ -51,6 +53,36 @@ export function runForgettingSweep(userId) {
   _archiveWeak(db, userId, 'learned_insights', 'confidence');
   _archiveWeak(db, userId, 'entities',         null);
   _archiveWeak(db, userId, 'campaigns',        null);
+  _checkMemoryHealth(db, userId);
+}
+
+function _checkMemoryHealth(db, userId) {
+  try {
+    let count;
+    try {
+      count = db.prepare(
+        `SELECT COUNT(*) AS n FROM learned_insights
+         WHERE user_id = ? AND (status IS NULL OR status != 'archived')`
+      ).get(userId)?.n ?? 0;
+    } catch (_) { return; }
+
+    if (count <= VECTOR_THRESHOLD) return;
+
+    // Guard: warn at most once per day.
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = getMemory(userId, '_memory_health');
+    if (existing?.warned_date === today) return;
+
+    setMemory(userId, '_memory_health', {
+      insight_count: count,
+      threshold:     VECTOR_THRESHOLD,
+      warned_date:   today,
+    });
+    console.warn(
+      `[memory] ${userId}: learned_insights has ${count} active rows (threshold ${VECTOR_THRESHOLD}). ` +
+      `Consider switching to vector embeddings (all-MiniLM via ONNX) for better semantic recall.`
+    );
+  } catch (_) {}
 }
 
 function _archiveWeak(db, userId, table, confidenceCol) {

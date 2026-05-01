@@ -15,7 +15,7 @@ import {
   getProfile, listAgenda, addAgendaItem, setAgendaStatus, setAgendaTopic,
   clearStaleAgenda, listGoals, listCampaigns, listPosts, recentInsights,
   recentAttendance, recentInteractions, alreadyBriefedToday, logBriefing,
-  listAllUserIds, listEligibleAgenda,
+  listAllUserIds, listEligibleAgenda, getMemory,
 } from '../memory.js';
 import { buildCoreMemoryBlock } from '../coreMemory.js';
 
@@ -151,7 +151,17 @@ Write it now (the actual message text, no JSON):`;
     contents: [{ parts: [{ text: prompt }] }],
     config: { temperature: 0.5 },
   });
-  return (res.text || '').trim();
+  let text = (res.text || '').trim();
+
+  // Append memory health warning if insight count is above the vector threshold.
+  try {
+    const health = getMemory(userId, '_memory_health');
+    if (health?.insight_count > health?.threshold) {
+      text += `\n\n⚠️ שים לב: זיכרון שאול גדל ל-${health.insight_count} תובנות — שדרוג לחיפוש וקטורי יגדיל את הדיוק.`;
+    }
+  } catch (_) {}
+
+  return text;
 }
 
 // Called by the daily-briefing scheduler. Returns null if already briefed today

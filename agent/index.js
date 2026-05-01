@@ -394,8 +394,9 @@ function maybeLogCalendarMutation({ chatId, toolName, args, response }) {
   }
 }
 
-async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false, includeSendEmail = false, includeAgendaTools = false }) {
-  const declarations = [...mcpTools, ...extraTools];
+async function runGeminiWithTools({ chatId, history, message, systemInstruction, extraTools = [], includeSendWhatsapp = false, includeSendEmail = false, includeAgendaTools = false, toolScope = 'all' }) {
+  const scopedMcp = toolScope === 'marketing' ? [] : mcpTools;
+  const declarations = [...scopedMcp, ...extraTools];
   if (includeSendWhatsapp) declarations.push(SEND_WHATSAPP_DECL);
   if (includeSendEmail && isEmailConfigured()) declarations.push(SEND_EMAIL_DECL);
   if (includeAgendaTools) declarations.push(...AGENDA_CONTROL_TOOLS);

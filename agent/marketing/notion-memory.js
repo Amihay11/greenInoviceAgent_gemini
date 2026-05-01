@@ -315,12 +315,14 @@ export async function pullAgendaFromNotion(userId) {
       const sqliteId = findCachedSqliteId(userId, 'notion_agenda_', page.id);
       if (!sqliteId) continue;
 
+      const row = db.prepare('SELECT status, priority, updated_at FROM agenda_items WHERE id = ?').get(sqliteId);
+      if (!row) continue;
+      // Only apply if Notion was edited more recently than our SQLite row.
+      if (new Date(page.last_edited_time) <= new Date(row.updated_at)) continue;
+
       // Apply status changes (done/skipped set in Notion flow back)
       if (status && ['done', 'skipped', 'pending'].includes(status)) {
-        const row = db.prepare('SELECT status FROM agenda_items WHERE id = ?').get(sqliteId);
-        if (row && row.status !== status) {
-          setStatus(sqliteId, status);
-        }
+        if (row.status !== status) setStatus(sqliteId, status);
       }
       // Apply priority changes
       if (priority != null) {
@@ -349,6 +351,11 @@ export async function pullGoalsFromNotion(userId) {
       const p = page.properties;
       const sqliteId = findCachedSqliteId(userId, 'notion_goal_', page.id);
       if (!sqliteId) continue;
+
+      const goalRow = db.prepare('SELECT updated_at FROM goals WHERE id = ?').get(sqliteId);
+      if (!goalRow) continue;
+      // Only apply if Notion was edited more recently than our SQLite row.
+      if (new Date(page.last_edited_time) <= new Date(goalRow.updated_at)) continue;
 
       const status   = plainText(p.Status);
       const target   = plainText(p.Target);
@@ -380,7 +387,12 @@ export async function pullProfileFromNotion(userId) {
 
     const page = await notion.pages.retrieve({ page_id: pageId });
     const p = page.properties;
-    const { updateProfile } = await import('./memory.js');
+    const { updateProfile, getDb } = await import('./memory.js');
+
+    // Only apply if Notion was edited more recently than our SQLite profile row.
+    const db = getDb();
+    const profileRow = db.prepare('SELECT updated_at FROM business_profiles WHERE user_id = ?').get(userId);
+    if (profileRow && new Date(page.last_edited_time) <= new Date(profileRow.updated_at)) return;
 
     const fields = {
       business_name: plainText(p.Name),
