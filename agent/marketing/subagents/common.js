@@ -43,7 +43,25 @@ export async function runSubagent({ ai, modelName, prompt, grounded = false, tem
     config,
   });
   const text = result.text || '';
-  return { text, json: extractJson(text) };
+  const json = extractJson(text);
+  if (json !== null) return { text, json };
+
+  // One-shot retry: send the parse failure back to the model so it can self-correct.
+  try {
+    const retryResult = await ai.models.generateContent({
+      model: modelName,
+      contents: [
+        { parts: [{ text: prompt }] },
+        { parts: [{ text: text }], role: 'model' },
+        { parts: [{ text: 'Your previous response could not be parsed as JSON. Return ONLY a valid JSON object inside ```json fences. No prose before or after the fences.' }], role: 'user' },
+      ],
+      config,
+    });
+    const retryText = retryResult.text || '';
+    return { text: retryText, json: extractJson(retryText) };
+  } catch (_) {
+    return { text, json: null };
+  }
 }
 
 export function extractJson(text) {

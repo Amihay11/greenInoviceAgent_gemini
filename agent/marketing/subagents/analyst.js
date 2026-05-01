@@ -3,7 +3,7 @@
 
 import { buildPrompt, runSubagent } from './common.js';
 import * as meta from '../meta.js';
-import { upsertDailyInsight, recentInsights, recentAttendance, listPosts } from '../memory.js';
+import { upsertDailyInsight, recentInsights, recentAttendance, listPosts, listCampaigns } from '../memory.js';
 
 export async function pullDailyInsights({ userId }) {
   if (!meta.isConfigured()) return { skipped: true, reason: 'Meta API not configured' };
@@ -76,6 +76,29 @@ Always end with ONE concrete thing Shaul will do this week (not the user — Sha
   // Grounded: Analyst may benchmark against industry numbers.
   const { json } = await runSubagent({ ai, modelName, prompt, grounded: true });
   return json;
+}
+
+// Phase 5: reviewDraftPlan — internal sanity check against past performance
+// before the user sees a new campaign plan.
+export async function reviewDraftPlan({ userId, plan, ai, modelName }) {
+  const insights = recentInsights(userId, 30);
+  const pastCampaigns = listCampaigns(userId).slice(0, 10).map(c => ({
+    name: c.name, status: c.status, objective: c.objective,
+    budget_total: c.budget_total, duration_days: c.duration_days,
+  }));
+
+  const prompt = buildPrompt({
+    userId,
+    role: `You are the Analyst. Review a draft campaign plan against past performance data. Be brief and honest. Flag ONLY genuine concerns — don't nitpick style.`,
+    task: `Draft plan to review:\n${JSON.stringify(plan, null, 2)}\n\nPast campaigns (${pastCampaigns.length}):\n${JSON.stringify(pastCampaigns, null, 2)}\n\nDaily insights (last 30 days, ${insights.length} rows):\n${JSON.stringify(insights.slice(0, 20), null, 2)}\n\nFlag: unrealistic budget, audience overlap with past failed campaigns, duration mismatches, KPI that is untrackable. ok=true if no serious concerns.`,
+    schemaHint: `{
+  "ok": true|false,
+  "concerns": ["short concern 1", ...],
+  "suggestions": ["concrete suggestion 1", ...]
+}`,
+  });
+  const { json } = await runSubagent({ ai, modelName, prompt });
+  return json || { ok: true, concerns: [], suggestions: [] };
 }
 
 // Phase 4: refineCampaign — pull post-level metrics, identify top + bottom

@@ -57,6 +57,7 @@ Reply now (plain text, no JSON). Use tools if you need real-time data or to take
         systemInstruction,
         includeSendWhatsapp: true,
         includeSendEmail: true,
+        toolScope: 'marketing',
       });
       return (text || '').trim();
     } catch (err) {

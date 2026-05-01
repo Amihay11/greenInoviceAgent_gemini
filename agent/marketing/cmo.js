@@ -632,12 +632,24 @@ async function planFlow({ chatId, goal, ai, modelName }) {
     return reply(userId, 'תכתוב מה המטרה. לדוגמה: "mk plan לקבל 50 לידים בחודש קרוב"');
   }
   await reply(userId, '🧠 רגע, מנהל הקמפיין עובד על תוכנית...');
-  const plan = await campaignMgr.planCampaign({ userId, goal, ai, modelName });
+  let plan = await campaignMgr.planCampaign({ userId, goal, ai, modelName });
   if (!plan) return reply(userId, 'לא הצלחתי לבנות תוכנית. נסה לנסח את המטרה אחרת.');
+
+  // Internal peer review — hidden behind the spinner already shown above.
+  let reviewNotes = '';
+  try {
+    const critique = await analyst.reviewDraftPlan({ userId, plan, ai, modelName });
+    if (critique && (critique.concerns?.length > 0 || !critique.ok)) {
+      plan = await campaignMgr.refinePlan({ userId, plan, critique, ai, modelName });
+      if (critique.concerns?.length) {
+        reviewNotes = `\n\n*הערות סקירה פנימית:*\n${critique.concerns.map(c => `• ${c}`).join('\n')}`;
+      }
+    }
+  } catch (_) {}
 
   const summary = formatCampaignSummary(plan);
   setPending(chatId, 'save_campaign', { plan, goal });
-  const msg = `${summary}\n\n_שלח *אישור* כדי לשמור את הקמפיין, או *לא* כדי לבטל._`;
+  const msg = `${summary}${reviewNotes}\n✓ עבר סקירה פנימית\n\n_שלח *אישור* כדי לשמור את הקמפיין, או *לא* כדי לבטל._`;
   logInteraction({ userId, role: 'assistant', agent: 'campaign_manager', content: msg, meta: plan });
   return msg;
 }
@@ -811,6 +823,7 @@ Task: draft and propose sending a WhatsApp message to a CLIENT (not the user).
       message: `שלח ל${c.name}: ${intent}`,
       systemInstruction: sys,
       includeSendWhatsapp: true,
+      toolScope: 'marketing',
     });
     if (text) return reply(userId, text);
     return null; // preview already sent by the local tool handler
@@ -1481,6 +1494,11 @@ function doneAgendaFlow({ userId, args }) {
 
 // Build a human-readable hint from top-performing format patterns.
 function buildFormatHint(userId, platform) {
+  // 20% exploration: push the Creative to try a format it has never used.
+  // 80% exploitation: bias toward the proven top-performing patterns.
+  if (Math.random() < 0.2) {
+    return 'EXPLORE MODE: try a format Shaul has never used — pick a different tone, hook type, and length from everything in the past posts. Be bold and original.';
+  }
   try {
     const top = getTopFormats(userId, platform, 3);
     if (!top.length) return null;
