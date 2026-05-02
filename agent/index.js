@@ -445,14 +445,39 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
 }
 
 // --- WhatsApp Setup ---
-const puppeteerConfig = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+const puppeteerConfig = {
+  headless: true,
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-zygote',
+    '--single-process',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--disable-translate',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--safebrowsing-disable-auto-update',
+  ],
+};
 if (process.env.CHROME_EXECUTABLE_PATH) {
   puppeteerConfig.executablePath = process.env.CHROME_EXECUTABLE_PATH;
 }
 
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: join(__dirname, 'whatsapp-auth') }),
-  puppeteer: puppeteerConfig
+  puppeteer: puppeteerConfig,
+  webVersion: '2.3000.1017054612-alpha',
+  webVersionCache: {
+    type: 'local',
+    path: join(__dirname, 'whatsapp-web-cache'),
+  },
 });
 
 let pairingCodeRequested = false;
