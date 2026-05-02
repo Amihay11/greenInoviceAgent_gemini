@@ -63,7 +63,7 @@ function takePending(chatId) {
   return p;
 }
 
-const APPROVE_RE = /^(אישור|כן|approve|yes|y|1|אשר)$/i;
+const APPROVE_RE = /^(אישור|מאשר|כן|approve|yes|y|1|אשר)$/i;
 const REJECT_RE  = /^(לא|בטל|no|cancel|n|2)$/i;
 
 // Public hooks for index.js — let the WhatsApp router register a pending
