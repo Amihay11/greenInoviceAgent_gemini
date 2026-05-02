@@ -1,0 +1,24 @@
+{
+  "user_id": "user-1",
+  "display_name": "Amihay",
+  "channel": "whatsapp_web",
+  "locale": "he",
+  "known_domains": [
+    { "name": "Electrical/Algorithm Engineering", "tags": ["LTE", "5G", "DSP", "MATLAB"] },
+    { "name": "Physical DIY", "tags": ["carpentry", "welding", "acoustics"] },
+    { "name": "Music", "tags": ["piano", "Cubase"] },
+    { "name": "Philosophy" },
+    { "name": "Economics" },
+    { "name": "Psychology" }
+  ],
+  "custom_learning_rules": [
+    {
+      "id": "english-b2-to-c1",
+      "trigger": "input_language == 'en'",
+      "action": "Begin reply with a brief phrasing correction focusing on native nuance, then continue normally.",
+      "negative": "If input is Hebrew, do NOT correct English."
+    }
+  ],
+  "preferred_personas": "auto",
+  "voice_default": false
+}
