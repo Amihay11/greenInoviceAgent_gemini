@@ -55,7 +55,7 @@ function getMemDb() {
   const p = findExistingDbPath();
   if (!p) { memDbLastError = `no DB at any of: ${DB_CANDIDATES.join(', ')}`; return null; }
   try {
-    const Database = require('better-sqlite3');
+    const Database = require(path.join(AGENT_DIR, 'node_modules', 'better-sqlite3'));
     memDb = new Database(p, { readonly: false, fileMustExist: true });
     memDbPath = p;
     memDbLastError = null;
@@ -79,12 +79,37 @@ function formatUptime(ms) {
   return `${s}s`;
 }
 
+// ── systemd helpers (Linux/OCI) ───────────────────────────────────────────────
+const USE_SYSTEMD = !IS_WIN && (() => {
+  try { require('child_process').execSync('systemctl --user is-enabled shaul-agent.service 2>/dev/null'); return true; }
+  catch (_) { return false; }
+})();
+
+function systemdStatus() {
+  try {
+    const { execSync } = require('child_process');
+    const active = execSync('systemctl --user is-active shaul-agent.service 2>/dev/null').toString().trim();
+    if (active !== 'active') return { running: false, pid: null, uptime: '0s' };
+    const pid = parseInt(execSync('systemctl --user show shaul-agent.service --property=MainPID --value 2>/dev/null').toString().trim(), 10);
+    const tsRaw = execSync('systemctl --user show shaul-agent.service --property=ActiveEnterTimestamp --value 2>/dev/null').toString().trim();
+    let uptime = '0s';
+    if (tsRaw) {
+      const ts = new Date(tsRaw);
+      if (!isNaN(ts)) uptime = formatUptime(Date.now() - ts.getTime());
+    }
+    return { running: true, pid: pid || null, uptime };
+  } catch (_) {
+    return { running: false, pid: null, uptime: '0s' };
+  }
+}
+
 function getStatus() {
+  if (USE_SYSTEMD) return systemdStatus();
   try {
     const raw = fs.readFileSync(PID_FILE, 'utf8').trim();
     const pid = parseInt(raw, 10);
     if (isNaN(pid)) return { running: false, pid: null, uptime: '0s' };
-    process.kill(pid, 0); // throws ESRCH if dead
+    process.kill(pid, 0);
     const uptime = formatUptime(Date.now() - fs.statSync(PID_FILE).mtimeMs);
     return { running: true, pid, uptime };
   } catch (_) {
@@ -134,7 +159,17 @@ function apiStatus(req, res) {
   sendJSON(res, 200, getStatus());
 }
 
+function systemctlAction(action, res, successMsg) {
+  // --no-block: return immediately instead of waiting for service to fully start
+  const noBlock = (action === 'start' || action === 'restart') ? ['--no-block'] : [];
+  execFile('systemctl', ['--user', ...noBlock, action, 'shaul-agent.service'], { timeout: 8000 }, (err, stdout, stderr) => {
+    if (err) return sendJSON(res, 500, { ok: false, error: (stderr || err.message).trim() });
+    sendJSON(res, 200, { ok: true, message: successMsg });
+  });
+}
+
 function apiStart(req, res) {
+  if (USE_SYSTEMD) return systemctlAction('start', res, 'Agent started via systemd');
   const s = getStatus();
   if (s.running) return sendJSON(res, 200, { ok: true, message: `Already running (PID ${s.pid})` });
   const done = (err, stdout) => {
@@ -145,6 +180,7 @@ function apiStart(req, res) {
 }
 
 function apiStop(req, res) {
+  if (USE_SYSTEMD) return systemctlAction('stop', res, 'Agent stopped via systemd');
   const done = (err, stdout, stderr) => {
     if (err) return sendJSON(res, 500, { ok: false, error: (stderr || err.message).trim() });
     sendJSON(res, 200, { ok: true, message: (stdout || '').trim() || 'Stopped' });
@@ -153,6 +189,7 @@ function apiStop(req, res) {
 }
 
 function apiRestart(req, res) {
+  if (USE_SYSTEMD) return systemctlAction('restart', res, 'Agent restarted via systemd');
   const stopDone = () => {
     setTimeout(() => {
       const done = (err, stdout) => {

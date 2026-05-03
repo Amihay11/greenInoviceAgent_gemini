@@ -815,8 +815,10 @@ client.on('message', async msg => {
   let intent = 'general';
   try { intent = await classifyIntent(msgText, ai, modelName); } catch (_) {}
 
-  if (intent === 'general' || intent === 'marketing') {
-    await handleMkRouted(msg, msgText, ai, modelName, client);
+  // Only show confirmation menu for invoice (high-stakes, irreversible).
+  // All other intents (note_save, note_remind, marketing, general, …) execute directly.
+  if (intent !== 'invoice') {
+    await executeIntent(intent, msgText, msg, ai, modelName, client);
     return;
   }
 

@@ -8,6 +8,10 @@
 // Required env vars:
 //   CANVA_CLIENT_ID, CANVA_CLIENT_SECRET, CANVA_REFRESH_TOKEN
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 const API = 'https://api.canva.com/rest/v1';
 
 let cachedAccessToken = null;
@@ -44,6 +48,22 @@ async function getAccessToken() {
   }
   cachedAccessToken = data.access_token;
   cachedExpiry = Date.now() + ((data.expires_in || 3600) * 1000);
+
+  if (data.refresh_token && data.refresh_token !== process.env.CANVA_REFRESH_TOKEN) {
+    process.env.CANVA_REFRESH_TOKEN = data.refresh_token;
+    try {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
+      const envPath = path.join(__dirname, '..', '.env');
+      if (fs.existsSync(envPath)) {
+        let content = fs.readFileSync(envPath, 'utf8');
+        content = content.replace(/^CANVA_REFRESH_TOKEN=.*$/m, `CANVA_REFRESH_TOKEN=${data.refresh_token}`);
+        fs.writeFileSync(envPath, content);
+      }
+    } catch (err) {
+      console.error('[Canva] Failed to update CANVA_REFRESH_TOKEN in .env:', err.message);
+    }
+  }
+
   return cachedAccessToken;
 }
 
