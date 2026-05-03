@@ -4,10 +4,11 @@ const fs       = require('fs');
 const path     = require('path');
 const { execFile, spawn } = require('child_process');
 
-const ROOT_DIR  = __dirname;
-const AGENT_DIR = path.join(ROOT_DIR, 'agent');
-const PID_FILE  = path.join(ROOT_DIR, 'agent.pid');
-const LOG_FILE  = path.join(ROOT_DIR, 'agent.log');
+const ROOT_DIR        = __dirname;
+const AGENT_DIR       = path.join(ROOT_DIR, 'agent');
+const PID_FILE        = path.join(ROOT_DIR, 'agent.pid');
+const LOG_FILE        = path.join(ROOT_DIR, 'agent.log');
+const TOKEN_STATS_FILE = path.join(AGENT_DIR, 'data', 'token-usage.json');
 const START_SH  = path.join(ROOT_DIR, 'start-background.sh');
 const STOP_SH   = path.join(ROOT_DIR, 'stop.sh');
 const PORT      = parseInt(process.env.DASHBOARD_PORT || '3001', 10);
@@ -341,6 +342,44 @@ function apiMemoryDelete(req, res) {
   }
 }
 
+// ── token usage API ──────────────────────────────────────────────────────────
+
+const TOKEN_PRICE = {
+  'gemini-2.5-pro':   { input: 1.25,  output: 10.00 },
+  'gemini-2.5-flash': { input: 0.15,  output: 0.60  },
+  'gemini-2.0-flash': { input: 0.075, output: 0.30  },
+  'gemini-1.5-pro':   { input: 1.25,  output: 5.00  },
+  'gemini-1.5-flash': { input: 0.075, output: 0.30  },
+};
+
+function calcCost(inputTokens, outputTokens, model) {
+  const p = TOKEN_PRICE[model] || TOKEN_PRICE['gemini-2.0-flash'];
+  return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
+}
+
+function apiUsage(req, res) {
+  try {
+    const raw = fs.existsSync(TOKEN_STATS_FILE) ? fs.readFileSync(TOKEN_STATS_FILE, 'utf8') : null;
+    const stats = raw ? JSON.parse(raw) : null;
+    if (!stats) return sendJSON(res, 200, { available: false });
+    let totalCost = 0;
+    const byModel = Object.entries(stats.byModel || {}).map(([model, d]) => {
+      const cost = calcCost(d.inputTokens || 0, d.outputTokens || 0, model);
+      totalCost += cost;
+      return { model, inputTokens: d.inputTokens || 0, outputTokens: d.outputTokens || 0, calls: d.calls || 0, costUSD: cost };
+    });
+    sendJSON(res, 200, {
+      available: true,
+      total: stats.total,
+      totalCostUSD: totalCost,
+      byModel,
+      since: stats.total?.since || null,
+    });
+  } catch (e) {
+    sendJSON(res, 500, { error: e.message });
+  }
+}
+
 function serveMemoryHTML(req, res) {
   const html = getMemoryHTML();
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
@@ -575,6 +614,36 @@ function getDashboardHTML() {
   <div id="model-error" style="color:#ef4444;font-size:.75rem;margin-top:6px;display:none"></div>
 </div>
 
+<div class="card" id="usage-card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+    <div style="font-size:.95rem;font-weight:600">📊 Token Usage &amp; Billing</div>
+    <span id="usage-since" style="font-size:.72rem;color:#6b7280"></span>
+  </div>
+  <div id="usage-loading" style="font-size:.8rem;color:#6b7280">טוען...</div>
+  <div id="usage-body" style="display:none">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
+      <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:.7rem;color:#6b7280;margin-bottom:4px">Input Tokens</div>
+        <div id="u-input" style="font-size:1.1rem;font-weight:700;color:#60a5fa">—</div>
+      </div>
+      <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:.7rem;color:#6b7280;margin-bottom:4px">Output Tokens</div>
+        <div id="u-output" style="font-size:1.1rem;font-weight:700;color:#a78bfa">—</div>
+      </div>
+      <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:.7rem;color:#6b7280;margin-bottom:4px">API Calls</div>
+        <div id="u-calls" style="font-size:1.1rem;font-weight:700;color:#34d399">—</div>
+      </div>
+    </div>
+    <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:12px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:.85rem;color:#9ca3af">Estimated Cost (Google AI)</div>
+      <div id="u-cost" style="font-size:1.2rem;font-weight:700;color:#f59e0b">$—</div>
+    </div>
+    <div id="u-by-model" style="display:flex;flex-direction:column;gap:6px"></div>
+  </div>
+  <div id="usage-unavail" style="display:none;font-size:.8rem;color:#6b7280">אין נתוני שימוש עדיין — הם יצטברו בזמן ריצת הסוכן.</div>
+</div>
+
 <div class="card">
   <div class="log-header">
     <div class="log-title">📋 Live Logs</div>
@@ -738,6 +807,46 @@ async function setModel() {
 }
 
 loadModel();
+
+// ── Token Usage ──────────────────────────────────────────────────────────────
+function fmtNum(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return String(n);
+}
+
+async function loadUsage() {
+  try {
+    const r = await fetch('/api/usage');
+    const d = await r.json();
+    document.getElementById('usage-loading').style.display = 'none';
+    if (!d.available) {
+      document.getElementById('usage-unavail').style.display = 'block';
+      return;
+    }
+    document.getElementById('usage-body').style.display = 'block';
+    document.getElementById('u-input').textContent  = fmtNum(d.total?.inputTokens  || 0);
+    document.getElementById('u-output').textContent = fmtNum(d.total?.outputTokens || 0);
+    document.getElementById('u-calls').textContent  = fmtNum(d.total?.calls        || 0);
+    document.getElementById('u-cost').textContent   = '$' + (d.totalCostUSD || 0).toFixed(4);
+    if (d.since) document.getElementById('usage-since').textContent = 'since ' + new Date(d.since).toLocaleDateString();
+    const byModelEl = document.getElementById('u-by-model');
+    byModelEl.innerHTML = '';
+    for (const m of (d.byModel || [])) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;font-size:.78rem';
+      row.innerHTML = \`<span style="color:#e2e8f0;font-weight:600">\${m.model}</span>
+        <span style="color:#9ca3af">\${fmtNum(m.inputTokens)} in · \${fmtNum(m.outputTokens)} out · \${m.calls} calls</span>
+        <span style="color:#f59e0b;font-weight:600">$\${m.costUSD.toFixed(4)}</span>\`;
+      byModelEl.appendChild(row);
+    }
+  } catch (_) {
+    document.getElementById('usage-loading').textContent = 'שגיאה בטעינת נתוני שימוש';
+  }
+}
+
+loadUsage();
+setInterval(loadUsage, 30000);
 </script>
 </body>
 </html>`;
@@ -765,6 +874,7 @@ const server = http.createServer((req, res) => {
   else if (m === 'POST' && p === '/api/memory/delete') return apiMemoryDelete(req, res);
   else if (m === 'GET'  && p === '/api/model')         return apiModelGet(req, res);
   else if (m === 'POST' && p === '/api/model')         return apiModelSet(req, res);
+  else if (m === 'GET'  && p === '/api/usage')         return apiUsage(req, res);
   else { res.writeHead(404); res.end('Not found'); }
 });
 

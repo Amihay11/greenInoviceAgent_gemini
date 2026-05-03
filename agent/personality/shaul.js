@@ -90,7 +90,9 @@ export function buildToolsBlock({
     `- *send_whatsapp_message*: ONLY to message a CLIENT (never the user themselves). Look up the phone via GreenInvoice first. The system shows a preview and waits for "אשר" — call this tool once per intent, never retry.`);
 
   if (hasEmail) lines.push(
-    `- *send_email*: send an email FROM ortaladler5@gmail.com to any recipient. Use for outbound marketing, lead outreach, follow-ups, and campaign emails. You CAN and SHOULD use this when the user asks to send an email. Call it directly — it sends immediately.`);
+    `- *send_email*: send an email FROM ortaladler5@gmail.com to any recipient. Use for outbound marketing, lead outreach, follow-ups, and campaign emails. You CAN and SHOULD use this when the user asks to send an email. Call it directly — it sends immediately.
+  HTML DESIGN: when the user wants a designed/branded email, pass a responsive HTML string in the "html" field and a plain-text version in "body". Use this template structure — ALL CSS must be inline:
+  Header: full-width banner with brand color (#10b981 or brand color) and logo/name. Body: white card on light grey (#f4f4f4) background, 600px max-width, 20px padding, Hebrew-friendly font (Arial, sans-serif), clear heading + 2-3 short paragraphs, CTA button (background:#10b981, color:#fff, padding:14px 28px, border-radius:6px, font-size:16px, text-decoration:none, display:inline-block). Footer: small grey text with name + contact. Avoid external images — use background-color for banners. Keep it clean, professional, and mobile-friendly.`);
 
   // Nudge toward suggesting unconnected high-value tools naturally in conversation.
   const missing = [];
