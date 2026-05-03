@@ -6,6 +6,7 @@ import { Client as MCPClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
@@ -39,6 +40,49 @@ import { runForgettingSweep } from './marketing/forgetting.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
+
+// ── Token usage tracking ─────────────────────────────────────────────────────
+const DATA_DIR_AGENT = join(__dirname, 'data');
+const TOKEN_STATS_FILE = join(DATA_DIR_AGENT, 'token-usage.json');
+
+const TOKEN_PRICE = {
+  'gemini-2.5-pro':   { input: 1.25,  output: 10.00 },
+  'gemini-2.5-flash': { input: 0.15,  output: 0.60  },
+  'gemini-2.0-flash': { input: 0.075, output: 0.30  },
+  'gemini-1.5-pro':   { input: 1.25,  output: 5.00  },
+  'gemini-1.5-flash': { input: 0.075, output: 0.30  },
+};
+
+function loadTokenStats() {
+  try {
+    if (existsSync(TOKEN_STATS_FILE)) return JSON.parse(readFileSync(TOKEN_STATS_FILE, 'utf8'));
+  } catch (_) {}
+  const now = new Date().toISOString();
+  return { total: { inputTokens: 0, outputTokens: 0, calls: 0, since: now }, byModel: {} };
+}
+
+function saveTokenStats(stats) {
+  try {
+    if (!existsSync(DATA_DIR_AGENT)) mkdirSync(DATA_DIR_AGENT, { recursive: true });
+    writeFileSync(TOKEN_STATS_FILE, JSON.stringify(stats, null, 2));
+  } catch (_) {}
+}
+
+let _tokenStats = loadTokenStats();
+
+function trackTokenUsage(usageMeta, model) {
+  if (!usageMeta) return;
+  const inp = usageMeta.promptTokenCount || 0;
+  const out = usageMeta.candidatesTokenCount || 0;
+  _tokenStats.total.inputTokens  += inp;
+  _tokenStats.total.outputTokens += out;
+  _tokenStats.total.calls        += 1;
+  if (!_tokenStats.byModel[model]) _tokenStats.byModel[model] = { inputTokens: 0, outputTokens: 0, calls: 0 };
+  _tokenStats.byModel[model].inputTokens  += inp;
+  _tokenStats.byModel[model].outputTokens += out;
+  _tokenStats.byModel[model].calls        += 1;
+  saveTokenStats(_tokenStats);
+}
 
 // Ensure Gemini API Key is set
 if (!process.env.GEMINI_API_KEY) {
@@ -176,20 +220,21 @@ function getGreenInvoiceClient() {
 // --- Local function-tool: send_email ---
 const SEND_EMAIL_DECL = {
   name: 'send_email',
-  description: 'Send an email from ortaladler5@gmail.com to one recipient. Use for outbound marketing emails, follow-ups, and campaign outreach. Always show the user what you are about to send and get confirmation first — unless the user explicitly said "שלח עכשיו" or "תשלח".',
+  description: 'Send an email from ortaladler5@gmail.com to one recipient. Use for outbound marketing emails, follow-ups, and campaign outreach. Supports HTML design: pass a full responsive HTML string in the "html" field for beautiful marketing emails — always include a plain-text fallback in "body". Always show the user what you are about to send and get confirmation first — unless the user explicitly said "שלח עכשיו" or "תשלח".',
   parameters: {
     type: 'OBJECT',
     properties: {
       to:      { type: 'STRING', description: 'Recipient email address.' },
       subject: { type: 'STRING', description: 'Email subject line.' },
-      body:    { type: 'STRING', description: 'Plain-text email body.' },
+      body:    { type: 'STRING', description: 'Plain-text email body (used as fallback when html is provided).' },
+      html:    { type: 'STRING', description: 'Optional. Full HTML email body with inline CSS for rich marketing design. When provided, email clients render this; body is the plain-text fallback.' },
     },
     required: ['to', 'subject', 'body'],
   },
 };
 
 async function handleSendEmailLocal({ args }) {
-  const { to, subject, body } = args || {};
+  const { to, subject, body, html } = args || {};
   if (!to || !subject || !body) {
     return { status: 'error', error: 'Missing to/subject/body' };
   }
@@ -197,14 +242,11 @@ async function handleSendEmailLocal({ args }) {
     return { status: 'error', error: 'Gmail not configured — run agent/scripts/gmail-oauth.js first.' };
   }
   try {
-    await emailTransporter.sendMail({
-      from: process.env.GMAIL_USER,
-      to,
-      subject,
-      text: body,
-    });
-    console.log(`[email] Sent to ${to} — "${subject}"`);
-    return { status: 'sent', to, subject };
+    const mailOptions = { from: process.env.GMAIL_USER, to, subject, text: body };
+    if (html) mailOptions.html = html;
+    await emailTransporter.sendMail(mailOptions);
+    console.log(`[email] Sent ${html ? 'HTML ' : ''}email to ${to} — "${subject}"`);
+    return { status: 'sent', to, subject, format: html ? 'html' : 'text' };
   } catch (err) {
     console.error('[email] Send failed:', err.message);
     return { status: 'error', error: err.message };
@@ -413,6 +455,7 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
   });
 
   let result = await chat.sendMessage({ message });
+  trackTokenUsage(result.usageMetadata, modelName);
 
   while (result.functionCalls && result.functionCalls.length > 0) {
     const fc = result.functionCalls[0];
@@ -439,6 +482,7 @@ async function runGeminiWithTools({ chatId, history, message, systemInstruction,
     result = await chat.sendMessage({
       message: [{ functionResponse: { name: fc.name, response } }],
     });
+    trackTokenUsage(result.usageMetadata, modelName);
   }
 
   return { text: result.text, history: await chat.getHistory() };
@@ -539,6 +583,7 @@ Categories:
 
 Message: "${text.slice(0, 400)}"` }] }]
   });
+  trackTokenUsage(res.usageMetadata, modelName);
   const clean = ((res.text || '').trim().toLowerCase()).replace(/[^a-z_]/g, '');
   return INTENT_LABEL[clean] ? clean : 'general';
 }
@@ -697,6 +742,7 @@ async function handleGcCommand(msg) {
         systemInstruction: buildSystemPrompt({ channel: 'whatsapp', task: 'general', tools: TOOLS_BLOCK })
       }
     });
+    trackTokenUsage(result.usageMetadata, modelName);
     await client.sendMessage(msg.from, result.text || "No response generated.");
   } catch (err) {
     console.error("GC command error:", err);
